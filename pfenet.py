@@ -115,6 +115,9 @@ class PFENet(nn.Module):
         )
 
     def forward(self, sx, sy, qx):
+        # get the deep feature of the query sample
+        # query_feat_4 is used for generate the pior mask
+        # query_feat is used for fusion and prediction
         with torch.no_grad():
             query_feat_0 = self.layer0(qx)
             query_feat_1 = self.layer1(query_feat_0)
@@ -124,6 +127,10 @@ class PFENet(nn.Module):
         query_feat = torch.cat([query_feat_3, query_feat_2], 1)
         query_feat = self.down_query(query_feat)  # (n, d, h3, w3)
 
+        # get the deep feature of the support sample
+        # supp_feat_4 is used for generate the pior mask
+        # supp_feat is used for fusion and prediction
+        # not that supp_feat_4 and supp_feat have different shape
         sx_flat = sx.view((-1, *sx.shape[2:]))  # (n, k, c, h, w) -> (nk, c, h, w)
         sy_flat = sy.view((-1, 1, *sy.shape[2:]))  # (n, k, h, w) -> (nk, 1, h, w)
         with torch.no_grad():
