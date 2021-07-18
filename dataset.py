@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 
+"""
+@author: xi
+@since: 2021-07-19
+"""
 
 import collections
 import random
@@ -34,7 +38,10 @@ class AugmenterWrapper(object):
 
 
 class SegmentationDataset(Dataset):
-    ds_cache = {}
+    """Dataset for k-shot image segmentation.
+    """
+
+    DS_CACHE = {}
 
     def __init__(self,
                  path,
@@ -46,16 +53,14 @@ class SegmentationDataset(Dataset):
         if augmenters is not None:
             self._transform = AugmenterWrapper(augmenters)
 
-        if path not in self.ds_cache:
-            doc_list = []
-            self.ds_cache[path] = doc_list
-            with DocSet(path, 'r') as ds:
-                for doc in tqdm(ds):
-                    doc_list.append(doc)
-
+        # Shaban uses these lines to remove small objects:
+        # if util.change_coordinates(mask, 32.0, 0.0).sum() > 2:
+        #    filtered_item.append(item)
+        # which means the mask will be downsampled to 1/32 of the original size and the valid area should be
+        # larger than 2, therefore the area in original size should be accordingly larger than 2 * 32 * 32
         self._doc_list = []  # type: list[dict]
         self._sub_class_dict = collections.defaultdict(list)
-        for doc in self.ds_cache[path]:
+        for doc in self._load_ds(path):
             label = doc['mask']
             label_class = []
             for c in doc['classes']:
@@ -70,6 +75,16 @@ class SegmentationDataset(Dataset):
                 for c in label_class:
                     if c in sub_class_list:
                         self._sub_class_dict[c].append(doc)
+
+    def _load_ds(self, path):
+        if path in self.DS_CACHE:
+            return self.DS_CACHE[path]
+        doc_list = []
+        self.DS_CACHE[path] = doc_list
+        with DocSet(path, 'r') as ds:
+            for doc in tqdm(ds):
+                doc_list.append(doc)
+        return doc_list
 
     def __getitem__(self, i):
         doc = self._doc_list[i]
@@ -90,7 +105,7 @@ class SegmentationDataset(Dataset):
             label = self._make_label(doc['mask'], class_chosen)
             if callable(self._transform):
                 image, label = self._transform(image, label)
-            
+
     @staticmethod
     def _make_label(raw_label, class_chosen):
         label = np.zeros_like(raw_label)
