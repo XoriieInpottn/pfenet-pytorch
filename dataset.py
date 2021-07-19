@@ -14,7 +14,6 @@ from typing import Iterable
 import cv2 as cv
 import numpy as np
 import torch
-from docset import DocSet
 from imgaug import SegmentationMapsOnImage
 from imgaug import augmenters as iaa
 from torch.utils.data import Dataset
@@ -81,20 +80,21 @@ class SegmentationDataset(Dataset):
     """Dataset for k-shot image segmentation.
     """
 
-    DS_CACHE = {}
-
     def __init__(self,
                  path,
                  sub_class_list,
                  num_shots,
+                 image_size=(448, 448),
                  augmenters=None):
         self._num_shots = num_shots
+        if not isinstance(image_size, (tuple, list)):
+            image_size = (image_size, image_size)
         if augmenters is None:
             augmenters = []
         self._transform = AugmenterWrapper([
             *augmenters,
             iaa.PadToAspectRatio(1.0, position='center-center').to_deterministic(),
-            iaa.Resize((448, 448))
+            iaa.Resize(image_size)
         ])
 
         # Shaban uses these lines to remove small objects:
@@ -133,16 +133,6 @@ class SegmentationDataset(Dataset):
                 for c in label_class:
                     if c in sub_class_list:
                         self._sub_class_dict[c].append(doc)
-
-    def _load_ds(self, path):
-        if path in self.DS_CACHE:
-            return self.DS_CACHE[path]
-        doc_list = []
-        self.DS_CACHE[path] = doc_list
-        with DocSet(path, 'r') as ds:
-            for doc in tqdm(ds):
-                doc_list.append(doc)
-        return doc_list
 
     def __getitem__(self, i):
         doc = self._doc_list[i]
