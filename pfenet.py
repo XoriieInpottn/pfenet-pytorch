@@ -114,7 +114,21 @@ class PFENet(nn.Module):
             nn.Conv2d(feat_size, num_classes, kernel_size=(1, 1))
         )
 
-    def forward(self, sx, sy, qx):
+    def loss(self, out, aux_out, qy):
+        # compute main loss & aux loss
+        loss_fn = torch.nn.CrossEntropyLoss()
+        main_loss = loss_fn(out, qy.long())
+        aux_shape = aux_out.shape
+
+        aux_out = aux_out.permute(0, 2, 1, 3, 4)
+
+        qy = qy.unsqueeze(1)
+        qy = torch.repeat_interleave(qy, repeats=aux_shape[1], dim=1)
+        aux_loss = loss_fn(aux_out, qy.long())
+
+        return main_loss, aux_loss
+
+    def forward(self, sx, sy, qx, qy):
         # get the deep feature of the query sample
         # query_feat_4 is used for generate the pior mask
         # query_feat is used for fusion and prediction
@@ -151,7 +165,7 @@ class PFENet(nn.Module):
         supp_feat = supp_feat.mean(1)  # (n, d, 1, 1)
 
         corr = self._make_corr(supp_feat_4, query_feat_4, (query_feat.size(2), query_feat.size(3)))
-        pyramid_feat, out_list = self._pyramid(supp_feat, query_feat, corr)
+        pyramid_feat, aux_out = self._pyramid(supp_feat, query_feat, corr)
 
         feat = self.res1(pyramid_feat)
         feat = self.res2(feat) + feat
@@ -159,18 +173,24 @@ class PFENet(nn.Module):
 
         if self._output_size is not None:
             out = resize(out, self._output_size)
-
+        else:
+            out = resize(out, 224)
         # todo
         if self.training:
-            main_loss = F.cross_entropy(out, y.long())
+            '''
+            main_loss = F.cross_entropy(out, sy.long())
             aux_loss = torch.zeros_like(main_loss).cuda()
 
             for idx_k in range(len(out_list)):
                 inner_out = out_list[idx_k]
-                inner_out = F.interpolate(inner_out, size=(h, w), mode='bilinear', align_corners=True)
-                aux_loss = aux_loss + F.cross_entropy(inner_out, y.long())
+                inner_out = F.interpolate(inner_out, size=self._output_size, mode='bilinear', align_corners=True)
+                aux_loss = aux_loss + F.cross_entropy(inner_out, sy.long())
             aux_loss = aux_loss / len(out_list)
             return out.max(1)[1], main_loss, aux_loss
+            '''
+            main_loss, aux_loss = self.loss(out, aux_out, qy)
+            return out.max(1)[1], main_loss, aux_loss
+
         else:
             return out
 
@@ -222,12 +242,15 @@ class PFENet(nn.Module):
 
             merge_feat_bin = self.beta_conv[idx](merge_feat_bin) + merge_feat_bin  # (n, d, bin_h, bin_w)
             inner_out_bin = self.inner_cls[idx](merge_feat_bin)  # (n, num_class, bin_h, bin_w)
+            inner_out_bin = F.interpolate(inner_out_bin, size=224, mode='bilinear', align_corners=True)  # (n,num_class,output_h,output_w)
+            inner_out_bin = inner_out_bin.unsqueeze(1)  # (n,1,num_class,output_h,output_w)
             out_list.append(inner_out_bin)
 
             merge_feat_bin = resize(merge_feat_bin, query_feat_hw)  # (n, d, h3, w3)
             pyramid_feat_list.append(merge_feat_bin)
         pyramid_feat = torch.cat(pyramid_feat_list, 1)
-        return pyramid_feat, out_list
+        aux_out = torch.cat(out_list, 1)
+        return pyramid_feat, aux_out
 
 
 def main():
@@ -235,8 +258,9 @@ def main():
     sx = torch.normal(0.0, 1.0, (4, 5, 3, 224, 224), dtype=torch.float32)
     sy = torch.normal(0.0, 1.0, (4, 5, 224, 224), dtype=torch.float32)
     qx = torch.normal(0.0, 1.0, (4, 3, 224, 224), dtype=torch.float32)
-    out = model(sx, sy, qx)
-    print(out.shape)
+    qy = torch.ones(4, 224, 224)
+    out = model(sx, sy, qx, qy)
+
     return 0
 
 
