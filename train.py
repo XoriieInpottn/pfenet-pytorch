@@ -56,7 +56,20 @@ class Trainer(object):
             num_workers=10,
             pin_memory=True
         )
-
+        test_dataset = dataset.SegmentationDataset(
+            self._args.data_path,
+            [16, 17, 18, 19, 20],
+            num_shots=self._args.num_shots,
+            image_size=self._args.image_size,
+            augmenters=None
+        )
+        self._test_loader = DataLoader(
+            test_dataset,
+            batch_size=self._args.batch_size,
+            shuffle=True,
+            num_workers=10,
+            pin_memory=True
+        )
     def _create_model(self):
         self._model = pfenet.PFENet(output_size=self._args.image_size)
         self._parameters = [
@@ -97,8 +110,39 @@ class Trainer(object):
                 loss = float(loss.numpy())
                 loss_g = 0.9 * loss_g + 0.1 * loss
                 loop.set_description(f'[{epoch + 1}/{self._args.num_epochs}] L={loss_g:.06f} lr={lr:.01e}', False)
+            if (epoch + 1) % 10 == 0 or (epoch + 1) == self._args.num_epochs:
+                self._model.eval()
+                iou_result = self._evaluate(5)
+                loop.set_description(
+                    f'[{epoch + 1}/{self._args.num_epochs}] '
+                    f'L={loss_g:.06f} '
+                    f'precision={iou_result:.02%} '
+                )
 
-            self._model.eval()
+
+
+    def _evaluate(self, num_loops):
+        iou_list=[]
+        for epoch in range(num_loops):
+            loop = tqdm(self._test_loader, dynamic_ncols=True, leave=False)
+            for supp_doc, query_doc in loop:
+                output = self._predict_step(
+                    supp_doc['image'],
+                    supp_doc['label'],
+                    query_doc['image']
+                )
+                target = query_doc['label']
+                output = output.view(-1)
+                target = target.view(-1)
+
+                pred_inds = (output >0)
+                target_inds = (target >0)
+
+                intersection = (pred_inds[target_inds]).long().sum().data.cpu[0]
+                union = pred_inds.long().sum().data.cpu[0] + target_inds.long().sum().data.cup[0]-intersection
+                iou=loat(intersection) / float(union)
+                iou_list.append(iou)
+        return iou_list.mean()
 
     def _train_step(self, sx, sy, qx, qy):
         sx = sx.to(self._device)
