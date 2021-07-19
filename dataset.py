@@ -6,6 +6,8 @@
 """
 
 import collections
+import csv
+import os
 import random
 from typing import Iterable
 
@@ -28,10 +30,18 @@ def image_to_tensor(image: np.ndarray) -> torch.Tensor:
     :param image: np.ndarray, dtype=uint8, shape=(h, w, c)
     :return: torch.Tensor, dtype=float32, shape=(c, h, w)
     """
-    t = torch.tensor(image, torch.float32)
-    t = (t - MEAN) / STD
-    t = t.permute((2, 0, 1))
-    return t
+    tensor = torch.tensor(image, dtype=torch.float32)
+    tensor = (tensor - MEAN) / STD
+    tensor = tensor.permute((2, 0, 1))
+    return tensor
+
+
+def tensor_to_image(tensor: torch.Tensor) -> np.ndarray:
+    tensor = tensor.permute((1, 2, 0))
+    tensor = tensor * STD + MEAN
+    tensor = torch.clip(tensor, 0, 255)
+    image = np.array(tensor.numpy(), np.uint8)
+    return image
 
 
 def label_to_tensor(label: np.ndarray) -> torch.Tensor:
@@ -40,8 +50,11 @@ def label_to_tensor(label: np.ndarray) -> torch.Tensor:
     :param label: np.ndarray, dtype=uint8, shape=(h, w)
     :return: torch.Tensor, dtype=int64, shape=(h, w)
     """
-    t = torch.tensor(label, torch.int64)
-    return t
+    return torch.tensor(label, dtype=torch.int64)
+
+
+def tensor_to_label(tensor: torch.Tensor) -> np.ndarray:
+    return np.array(tensor.numpy(), np.uint8)
 
 
 DEFAULT_AUG = [
@@ -76,9 +89,13 @@ class SegmentationDataset(Dataset):
                  num_shots,
                  augmenters=None):
         self._num_shots = num_shots
-        self._transform = None
-        if augmenters is not None:
-            self._transform = AugmenterWrapper(augmenters)
+        if augmenters is None:
+            augmenters = []
+        self._transform = AugmenterWrapper([
+            *augmenters,
+            iaa.PadToAspectRatio(1.0, position='center-center').to_deterministic(),
+            iaa.Resize((448, 448))
+        ])
 
         # Shaban uses these lines to remove small objects:
         # if util.change_coordinates(mask, 32.0, 0.0).sum() > 2:
@@ -87,16 +104,30 @@ class SegmentationDataset(Dataset):
         # larger than 2, therefore the area in original size should be accordingly larger than 2 * 32 * 32
         self._doc_list = []  # type: list[dict]
         self._sub_class_dict = collections.defaultdict(list)
-        for doc in self._load_ds(path):
-            label = doc['mask']
+
+        self._dir_path = os.path.dirname(path)
+        docs = []
+        with open(path, 'r') as f:
+            csv_reader = csv.DictReader(f)
+            for doc in csv_reader:
+                doc['image'] = os.path.join(self._dir_path, doc['image'])
+                doc['label'] = os.path.join(self._dir_path, doc['label'])
+                docs.append(doc)
+
+        for doc in tqdm(docs):
+            label = np.load(doc['label'])
             label_class = []
-            for c in doc['classes']:
-                if c in sub_class_list:
-                    tmp_label = np.zeros_like(label)
-                    target_pix = np.where(label == c)
-                    tmp_label[target_pix[0], target_pix[1]] = 1
-                    if tmp_label.sum() >= 2 * 32 * 32:
-                        label_class.append(c)
+            for c in np.unique(label):
+                c = int(c)
+                if c == 0 or c == 255:
+                    continue
+                if c not in sub_class_list:
+                    continue
+                tmp_label = np.zeros_like(label)
+                target_pix = np.where(label == c)
+                tmp_label[target_pix[0], target_pix[1]] = 1
+                if tmp_label.sum() >= 2 * 32 * 32:
+                    label_class.append(c)
             if len(label_class) > 0:
                 self._doc_list.append(doc)
                 for c in label_class:
@@ -115,11 +146,11 @@ class SegmentationDataset(Dataset):
 
     def __getitem__(self, i):
         doc = self._doc_list[i]
-        class_chosen = random.choice([int(a) for a in np.unique(doc['mask']) if a != 0 and a != 255])
-
-        image = cv.imdecode(np.frombuffer(doc['image'], np.byte), cv.IMREAD_COLOR)
+        image = cv.imread(doc['image'], cv.IMREAD_COLOR)
         image = cv.cvtColor(image, cv.COLOR_BGR2RGB)
-        label = self._make_label(doc['mask'], class_chosen)
+        raw_label = np.load(doc['label'])
+        class_chosen = random.choice([int(a) for a in np.unique(raw_label) if a in self._sub_class_dict])
+        label = self._make_label(raw_label, class_chosen)
         if callable(self._transform):
             image, label = self._transform(image, label)
         query_doc = {
@@ -131,13 +162,14 @@ class SegmentationDataset(Dataset):
         supp_label_list = []
         docs_chosen = random.sample(self._sub_class_dict[class_chosen], self._num_shots)
         for doc in docs_chosen:
-            image = cv.imdecode(np.frombuffer(doc['image'], np.byte), cv.IMREAD_COLOR)
+            image = cv.imread(doc['image'], cv.IMREAD_COLOR)
             image = cv.cvtColor(image, cv.COLOR_BGR2RGB)
-            label = self._make_label(doc['mask'], class_chosen)
+            raw_label = np.load(doc['label'])
+            label = self._make_label(raw_label, class_chosen)
             if callable(self._transform):
                 image, label = self._transform(image, label)
-                supp_image_list.append(image_to_tensor(image))
-                supp_label_list.append(label_to_tensor(label))
+            supp_image_list.append(image_to_tensor(image))
+            supp_label_list.append(label_to_tensor(label))
         supp_doc = {
             'image': torch.stack(supp_image_list),  # (k, c, h, w)
             'label': torch.stack(supp_label_list)  # (k, h, w)
