@@ -8,11 +8,12 @@
 import argparse
 import os
 
+import numpy as np
 import torch
 from torch import optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-import numpy as np
+
 import dataset
 import pfenet
 import utils
@@ -109,36 +110,33 @@ class Trainer(object):
                 loss = float(loss.numpy())
                 loss_g = 0.9 * loss_g + 0.1 * loss
                 loop.set_description(f'[{epoch + 1}/{self._args.num_epochs}] L={loss_g:.06f} lr={lr:.01e}', False)
-            if (epoch + 1) % 10 == 0 or (epoch + 1) == self._args.num_epochs:
-                self._model.eval()
-                iou_result = self._evaluate(5)
-                loop.set_description(
-                    f'[{epoch + 1}/{self._args.num_epochs}] '
-                    f'L={loss_g:.06f} '
-                    f'precision={iou_result:.02%} '
-                )
 
-    def _evaluate(self, num_loops):
+            self._model.eval()
+            iou_result = self._evaluate()
+            loop.set_description(
+                f'[{epoch + 1}/{self._args.num_epochs}] '
+                f'L={loss_g:.06f} '
+                f'precision={iou_result:.02%} '
+            )
+
+    def _evaluate(self):
         iou_list = []
-        for epoch in range(num_loops):
-            loop = tqdm(self._test_loader, dynamic_ncols=True, leave=False)
-            for supp_doc, query_doc in loop:
-                output = self._predict_step(
-                    supp_doc['image'],
-                    supp_doc['label'],
-                    query_doc['image']
-                )
-                target = query_doc['label']
-                output = output.view(-1)
-                target = target.view(-1)
+        loop = tqdm(self._test_loader, dynamic_ncols=True, leave=False)
+        for supp_doc, query_doc in loop:
+            output = self._predict_step(
+                supp_doc['image'],
+                supp_doc['label'],
+                query_doc['image']
+            )
+            target = query_doc['label']  # (n, h, w)
 
-                pred_inds = (output > 0)
-                target_inds = (target > 0)
-
-                intersection = (pred_inds[target_inds]).long().sum().data.cpu[0]
-                union = pred_inds.long().sum().data.cpu[0] + target_inds.long().sum().data.cup[0] - intersection
-                iou = float(intersection) / float(union)
-                iou_list.append(iou)
+            intersection = ((output == 1) & (target == 1)).sum((1, 2))
+            union = ((output == 1) | (target == 1)).sum((1, 2))
+            iou = intersection / union
+            iou = iou.numpy()
+            iou_list.extend(iou)
+            iou_current = np.mean(iou_list)
+            loop.set_description(f'IOU={iou_current:0.2%}')
         return np.mean(iou_list)
 
     def _train_step(self, sx, sy, qx, qy):
