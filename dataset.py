@@ -97,14 +97,6 @@ class SegmentationDataset(Dataset):
             iaa.Resize(image_size)
         ])
 
-        # Shaban uses these lines to remove small objects:
-        # if util.change_coordinates(mask, 32.0, 0.0).sum() > 2:
-        #    filtered_item.append(item)
-        # which means the mask will be downsampled to 1/32 of the original size and the valid area should be
-        # larger than 2, therefore the area in original size should be accordingly larger than 2 * 32 * 32
-        self._doc_list = []  # type: list[dict]
-        self._sub_class_dict = collections.defaultdict(list)
-
         self._dir_path = os.path.dirname(path)
         docs = []
         with open(path, 'r') as f:
@@ -114,6 +106,8 @@ class SegmentationDataset(Dataset):
                 doc['label'] = os.path.join(self._dir_path, doc['label'])
                 docs.append(doc)
 
+        self._doc_list = []  # type: list[dict]
+        self._sub_class_dict = collections.defaultdict(list)
         for doc in tqdm(docs):
             label = np.load(doc['label'])
             label_class = []
@@ -126,6 +120,11 @@ class SegmentationDataset(Dataset):
                 tmp_label = np.zeros_like(label)
                 target_pix = np.where(label == c)
                 tmp_label[target_pix[0], target_pix[1]] = 1
+                # Shaban uses these lines to remove small objects:
+                # if util.change_coordinates(mask, 32.0, 0.0).sum() > 2:
+                #    filtered_item.append(item)
+                # which means the mask will be downsampled to 1/32 of the original size and the valid area should be
+                # larger than 2, therefore the area in original size should be accordingly larger than 2 * 32 * 32
                 if tmp_label.sum() >= 2 * 32 * 32:
                     label_class.append(c)
             if len(label_class) > 0:
@@ -170,10 +169,10 @@ class SegmentationDataset(Dataset):
     @staticmethod
     def _make_label(raw_label, class_chosen):
         label = np.zeros_like(raw_label)
-        target_pix = np.where(label == class_chosen)
-        ignore_pix = np.where(label == 255)
+        target_pix = np.where(raw_label == class_chosen)
+        # ignore_pix = np.where(raw_label == 255)
         label[:, :] = 0
         if target_pix[0].shape[0] > 0:
             label[target_pix[0], target_pix[1]] = 1
-        label[ignore_pix[0], ignore_pix[1]] = 255
+        # label[ignore_pix[0], ignore_pix[1]] = 255
         return label
