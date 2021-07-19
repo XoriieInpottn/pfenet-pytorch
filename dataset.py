@@ -11,11 +11,38 @@ from typing import Iterable
 
 import cv2 as cv
 import numpy as np
+import torch
 from docset import DocSet
 from imgaug import SegmentationMapsOnImage
 from imgaug import augmenters as iaa
 from torch.utils.data import Dataset
 from tqdm import tqdm
+
+MEAN = np.array([0.485, 0.456, 0.406], np.float32)
+STD = np.array([0.229, 0.224, 0.225], np.float32)
+
+
+def image_to_tensor(image: np.ndarray) -> torch.Tensor:
+    """Convert an image to torch tensor.
+
+    :param image: np.ndarray, dtype=uint8, shape=(h, w, c)
+    :return: torch.Tensor, dtype=float32, shape=(c, h, w)
+    """
+    t = torch.tensor(image, torch.float32)
+    t = (t - MEAN) / STD
+    t = t.permute((2, 0, 1))
+    return t
+
+
+def label_to_tensor(label: np.ndarray) -> torch.Tensor:
+    """Convert a label to torch tensor.
+
+    :param label: np.ndarray, dtype=uint8, shape=(h, w)
+    :return: torch.Tensor, dtype=int64, shape=(h, w)
+    """
+    t = torch.tensor(label, torch.int64)
+    return t
+
 
 DEFAULT_AUG = [
     iaa.Fliplr(p=0.5),
@@ -95,6 +122,10 @@ class SegmentationDataset(Dataset):
         label = self._make_label(doc['mask'], class_chosen)
         if callable(self._transform):
             image, label = self._transform(image, label)
+        query_doc = {
+            'image': image_to_tensor(image),
+            'label': label_to_tensor(label)
+        }
 
         supp_image_list = []
         supp_label_list = []
@@ -105,6 +136,14 @@ class SegmentationDataset(Dataset):
             label = self._make_label(doc['mask'], class_chosen)
             if callable(self._transform):
                 image, label = self._transform(image, label)
+                supp_image_list.append(image_to_tensor(image))
+                supp_label_list.append(label_to_tensor(label))
+        supp_doc = {
+            'image': torch.stack(supp_image_list),  # (k, c, h, w)
+            'label': torch.stack(supp_label_list)  # (k, h, w)
+        }
+
+        return supp_doc, query_doc
 
     @staticmethod
     def _make_label(raw_label, class_chosen):
