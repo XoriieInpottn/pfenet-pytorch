@@ -88,13 +88,14 @@ class Trainer(object):
             self._model.train()
             loop = tqdm(self._train_loader, dynamic_ncols=True, leave=False)
             for supp_doc, query_doc in loop:
-                loss, lr = self._train_step(
-                    supp_doc['image'],
-                    supp_doc['label'],
-                    query_doc['image'],
-                    query_doc['label']
-                )
-                loss = float(loss.numpy())
+                # loss, lr = self._train_step(
+                #     supp_doc['image'],
+                #     supp_doc['label'],
+                #     query_doc['image'],
+                #     query_doc['label']
+                # )
+                # loss = float(loss.numpy())
+                loss = 0.0
                 loss_g = 0.9 * loss_g + 0.1 * loss
                 loop.set_description(f'[{epoch + 1}/{self._args.num_epochs}] L={loss_g:.06f} lr={lr:.01e}', False)
 

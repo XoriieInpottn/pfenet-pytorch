@@ -142,6 +142,9 @@ class SegmentationDataset(Dataset):
                     if c in sub_class_list:
                         self._sub_class_dict[c].append(doc)
 
+    def __len__(self):
+        return len(self._doc_list)
+
     def __getitem__(self, i):
         doc = self._doc_list[i]
         image = cv.imread(doc['image'], cv.IMREAD_COLOR)
