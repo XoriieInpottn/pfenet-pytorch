@@ -117,7 +117,8 @@ class Trainer(object):
         sx = sx.to(self._device)
         sy = sy.to(self._device)
         qx = qx.to(self._device)
-        qy_ = self._model(sx, sy, qx)
+        pred = self._model(sx, sy, qx)
+        qy_ = torch.argmax(pred, 1)
         return qy_.detach().cpu()
 
 
