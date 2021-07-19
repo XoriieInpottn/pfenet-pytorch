@@ -12,7 +12,7 @@ import torch
 from torch import optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-
+import numpy as np
 import dataset
 import pfenet
 import utils
@@ -139,7 +139,7 @@ class Trainer(object):
                 union = pred_inds.long().sum().data.cpu[0] + target_inds.long().sum().data.cup[0] - intersection
                 iou = float(intersection) / float(union)
                 iou_list.append(iou)
-        return iou_list.mean()
+        return np.mean(iou_list)
 
     def _train_step(self, sx, sy, qx, qy):
         sx = sx.to(self._device)
