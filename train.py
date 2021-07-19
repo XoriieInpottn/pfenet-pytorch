@@ -24,14 +24,14 @@ class Trainer(object):
         parser = argparse.ArgumentParser()
         parser.add_argument('--gpu', type=str, default='0', help='Which GPU to use.')
         parser.add_argument('--data-path', required=True, help='Path of the directory that contains the data files.')
-        parser.add_argument('--batch-size', type=int, default=32, help='Batch size.')
-        parser.add_argument('--num-epochs', type=int, default=100, help='The number of epochs to train.')
+        parser.add_argument('--batch-size', type=int, default=8, help='Batch size.')
+        parser.add_argument('--num-epochs', type=int, default=50, help='The number of epochs to train.')
         parser.add_argument('--max-lr', type=float, default=1e-3, help='The maximum value of learning rate.')
         parser.add_argument('--weight-decay', type=float, default=0.3, help='The weight decay value.')
         parser.add_argument('--optimizer', default='AdamW', help='Name of the optimizer to use.')
 
         parser.add_argument('--num-shots', type=int, default=5)
-        parser.add_argument('--image-size', type=int, default=224)
+        parser.add_argument('--image-size', type=int, default=473)
         parser.add_argument('--output-dir', default='output')
         self._args = parser.parse_args()
         os.environ['CUDA_VISIBLE_DEVICES'] = self._args.gpu
@@ -47,7 +47,7 @@ class Trainer(object):
             [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
             num_shots=self._args.num_shots,
             image_size=self._args.image_size,
-            augmenters=dataset.DEFAULT_AUG
+            is_train=True
         )
         self._train_loader = DataLoader(
             train_dataset,
@@ -61,7 +61,6 @@ class Trainer(object):
             [16, 17, 18, 19, 20],
             num_shots=self._args.num_shots,
             image_size=self._args.image_size,
-            augmenters=None
         )
         self._test_loader = DataLoader(
             test_dataset,
@@ -71,7 +70,7 @@ class Trainer(object):
         )
 
     def _create_model(self):
-        self._model = pfenet.PFENet(output_size=self._args.image_size)
+        self._model = pfenet.PFENet(output_size=self._args.image_size).to(self._device)
         self._parameters = [
             *self._model.down_query.parameters(),
             *self._model.down_supp.parameters(),

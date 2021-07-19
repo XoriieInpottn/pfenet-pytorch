@@ -56,13 +56,6 @@ def tensor_to_label(tensor: torch.Tensor) -> np.ndarray:
     return np.array(tensor.numpy(), np.uint8)
 
 
-DEFAULT_AUG = [
-    iaa.Fliplr(p=0.5),
-    iaa.Flipud(p=0.5),
-    iaa.Crop(percent=(0, 0.1))
-]
-
-
 class AugmenterWrapper(object):
 
     def __init__(self, augmenters: Iterable[iaa.Augmenter]):
@@ -84,18 +77,19 @@ class SegmentationDataset(Dataset):
                  path,
                  sub_class_list,
                  num_shots,
-                 image_size=(448, 448),
-                 augmenters=None,
+                 image_size,
+                 is_train=False,
                  parse_class=False):
         self._num_shots = num_shots
         if not isinstance(image_size, (tuple, list)):
             image_size = (image_size, image_size)
-        if augmenters is None:
-            augmenters = []
         self._transform = AugmenterWrapper([
-            *augmenters,
-            iaa.PadToAspectRatio(1.0, position='center-center').to_deterministic(),
-            iaa.Resize(image_size)
+            iaa.Fliplr(p=0.5),
+            iaa.PadToFixedSize(500, 500),
+            iaa.CropToFixedSize(image_size[1], image_size[0])
+        ]) if is_train else AugmenterWrapper([
+            iaa.PadToFixedSize(500, 500),
+            iaa.CenterCropToFixedSize(image_size[1], image_size[0])
         ])
 
         self._dir_path = os.path.dirname(path)
@@ -109,7 +103,7 @@ class SegmentationDataset(Dataset):
 
         self._doc_list = []  # type: list[dict]
         self._sub_class_dict = collections.defaultdict(list)
-        for doc in tqdm(docs, leave=False):
+        for doc in tqdm(docs):
             label_class = []
 
             if parse_class:
