@@ -37,6 +37,7 @@ class Trainer(object):
         os.environ['CUDA_VISIBLE_DEVICES'] = self._args.gpu
         self._device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
+        self._create_dataset()
         self._create_model()
         self._create_optimizer()
 
@@ -69,6 +70,7 @@ class Trainer(object):
             *self._model.res2.parameters(),
             *self._model.cls.parameters(),
         ]
+        self._loss = pfenet.Loss()
 
     def _create_optimizer(self):
         optimizer_class = getattr(optim, self._args.optimizer)
@@ -103,7 +105,8 @@ class Trainer(object):
         sy = sy.to(self._device)
         qx = qx.to(self._device)
         qy = qy.to(self._device)
-        loss = self._model(sx, sy, qx, qy)
+        pred, pred_aux = self._model(sx, sy, qx)
+        loss = self._loss(pred, qy, pred_aux)
         loss.backward()
         self._optimizer.step()
         self._optimizer.zero_grad()

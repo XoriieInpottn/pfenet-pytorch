@@ -114,7 +114,15 @@ class PFENet(nn.Module):
             nn.Conv2d(feat_size, num_classes, kernel_size=(1, 1))
         )
 
-    def forward(self, sx, sy, qx, qy):
+    def forward(self, sx, sy, qx):
+        """PFENet
+
+        :param sx: dtype=float32, shape=(n, k, c, h, w)
+        :param sy: dtype=int64, shape=(n, k, h, w)
+        :param qx: dtype=float32, shape=(n, c, h, w)
+        :return: out: dtype=float32, shape=(n, num_classes, output_h, output_w)
+                 out_aux: dtype=float32, shape=(num_scales, n, num_classes, output_h, output_w)
+        """
         # get the deep feature of the query sample
         # query_feat_4 is used for generate the pior mask
         # query_feat is used for fusion and prediction
@@ -132,7 +140,7 @@ class PFENet(nn.Module):
         # supp_feat is used for fusion and prediction
         # not that supp_feat_4 and supp_feat have different shape
         sx_flat = sx.view((-1, *sx.shape[2:]))  # (n, k, c, h, w) -> (nk, c, h, w)
-        sy_flat = sy.view((-1, 1, *sy.shape[2:]))  # (n, k, h, w) -> (nk, 1, h, w)
+        sy_flat = sy.float().view((-1, 1, *sy.shape[2:]))  # (n, k, h, w) -> (nk, 1, h, w)
         with torch.no_grad():
             supp_feat_0 = self.layer0(sx_flat)
             supp_feat_1 = self.layer1(supp_feat_0)
@@ -161,8 +169,7 @@ class PFENet(nn.Module):
             out = resize(out, self._output_size)
 
         if self.training:
-            main_loss, aux_loss = self.loss(out, aux_out, qy)
-            return out.max(1)[1], main_loss, aux_loss
+            return out, aux_out
         else:
             return out
 
@@ -213,47 +220,61 @@ class PFENet(nn.Module):
                 merge_feat_bin = self.alpha_conv[idx - 1](rec_feat_bin) + merge_feat_bin  # (n, d, bin_h, bin_w)
 
             merge_feat_bin = self.beta_conv[idx](merge_feat_bin) + merge_feat_bin  # (n, d, bin_h, bin_w)
-            inner_out_bin = self.inner_cls[idx](merge_feat_bin)  # (n, num_class, bin_h, bin_w)
-            inner_out_bin = resize(inner_out_bin, self._output_size)  # (n,num_class,output_h,output_w)
-            inner_out_bin = inner_out_bin.unsqueeze(1)  # (n,1,num_class,output_h,output_w)
-            out_list.append(inner_out_bin)
+            if self.training:
+                inner_out_bin = self.inner_cls[idx](merge_feat_bin)  # (n, num_class, bin_h, bin_w)
+                inner_out_bin = resize(inner_out_bin, self._output_size)  # (n, num_class, output_h, output_w)
+                out_list.append(inner_out_bin)
 
             merge_feat_bin = resize(merge_feat_bin, query_feat_hw)  # (n, d, h3, w3)
             pyramid_feat_list.append(merge_feat_bin)
+
         pyramid_feat = torch.cat(pyramid_feat_list, 1)
-        aux_out = torch.cat(out_list, 1)
-        return pyramid_feat, aux_out
+        if self.training:
+            aux_out = torch.stack(out_list)  # (?, n, num_class, output_h, output_w)
+            return pyramid_feat, aux_out
+        return pyramid_feat, None
 
-    @staticmethod
-    def loss(out, aux_out, qy):
-        # compute main loss & aux loss
-        eps = 1e-5
 
-        # out: (n, c, h, w)
-        # qy: (n, h, w)
-        target = F.one_hot(qy, out.size(1)).float()  # (n, h, w, c)
+class Loss(nn.Module):
+
+    def __init__(self, eps=1e-10):
+        super(Loss, self).__init__()
+        self._eps = eps
+
+    def forward(self, pred, target, pred_aux=None):
+        """Cross-entropy loss.
+
+        :param pred: dtype=float32, shape=(n, c, h, w)
+        :param target: dtype=int64, shape=(n, h, w)
+        :param pred_aux: dtype=float32, shape=(?, n, c, h, w)
+        :return: loss
+        """
+        target = F.one_hot(target, pred.size(1)).float()  # (n, h, w, c)
         target = target.permute((0, 3, 1, 2))  # (n, c, h, w)
-        out = F.softmax(out, 1)
-        loss = -target * torch.log(out + eps) - (1.0 - target) * torch.log(1.0 - out + eps)
+        out = F.softmax(pred, 1)
+        loss = -target * torch.log(out + self._eps) - (1.0 - target) * torch.log(1.0 - out + self._eps)
         loss = loss.sum(1).mean()
 
-        # aux_out: (n, k, c, h, w)
-        target = target.unsqueeze(1)  # (n, 1, c, h, w)
-        aux_out = F.softmax(aux_out, 2)
-        loss_aux = -target * torch.log(aux_out + eps) - (1.0 - target) * torch.log(1.0 - aux_out + eps)
-        loss_aux = loss_aux.sum(2).mean(1).mean()
-        return loss, loss_aux
+        target = target.unsqueeze(0)  # (1, n, c, h, w)
+        pred_aux = F.softmax(pred_aux, 2)
+        loss_aux = -target * torch.log(pred_aux + self._eps) - (1.0 - target) * torch.log(1.0 - pred_aux + self._eps)
+        loss_aux = loss_aux.sum(2).mean(0).mean()
+
+        return loss + loss_aux
 
 
 def main():
     model = PFENet(output_size=(224, 224))
     sx = torch.normal(0.0, 1.0, (4, 5, 3, 224, 224), dtype=torch.float32)
-    sy = torch.normal(0.0, 1.0, (4, 5, 224, 224), dtype=torch.float32)
+    sy = torch.randint(0, 1, (4, 5, 224, 224), dtype=torch.int64)
     qx = torch.normal(0.0, 1.0, (4, 3, 224, 224), dtype=torch.float32)
     qy = torch.ones(4, 224, 224, dtype=torch.int64)
+
+    l = Loss()
+
     model.train()
-    out, loss, loss_aux = model(sx, sy, qx, qy)
-    print(loss, loss_aux)
+    out, out_aux = model(sx, sy, qx)
+    print(l(out, qy, out_aux))
 
     return 0
 
