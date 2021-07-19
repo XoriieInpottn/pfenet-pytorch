@@ -6,7 +6,7 @@
 """
 
 import collections
-import csv
+import json
 import os
 import random
 from typing import Iterable
@@ -85,7 +85,8 @@ class SegmentationDataset(Dataset):
                  sub_class_list,
                  num_shots,
                  image_size=(448, 448),
-                 augmenters=None):
+                 augmenters=None,
+                 parse_class=False):
         self._num_shots = num_shots
         if not isinstance(image_size, (tuple, list)):
             image_size = (image_size, image_size)
@@ -100,33 +101,41 @@ class SegmentationDataset(Dataset):
         self._dir_path = os.path.dirname(path)
         docs = []
         with open(path, 'r') as f:
-            csv_reader = csv.DictReader(f)
-            for doc in csv_reader:
+            for line in f:
+                doc = json.loads(line)
                 doc['image'] = os.path.join(self._dir_path, doc['image'])
                 doc['label'] = os.path.join(self._dir_path, doc['label'])
                 docs.append(doc)
 
         self._doc_list = []  # type: list[dict]
         self._sub_class_dict = collections.defaultdict(list)
-        for doc in tqdm(docs):
-            label = np.load(doc['label'])
+        for doc in tqdm(docs, leave=False):
             label_class = []
-            for c in np.unique(label):
-                c = int(c)
-                if c == 0 or c == 255:
-                    continue
-                if c not in sub_class_list:
-                    continue
-                tmp_label = np.zeros_like(label)
-                target_pix = np.where(label == c)
-                tmp_label[target_pix[0], target_pix[1]] = 1
-                # Shaban uses these lines to remove small objects:
-                # if util.change_coordinates(mask, 32.0, 0.0).sum() > 2:
-                #    filtered_item.append(item)
-                # which means the mask will be downsampled to 1/32 of the original size and the valid area should be
-                # larger than 2, therefore the area in original size should be accordingly larger than 2 * 32 * 32
-                if tmp_label.sum() >= 2 * 32 * 32:
+
+            if parse_class:
+                label = np.load(doc['label'])
+                for c in np.unique(label):
+                    c = int(c)
+                    if c == 0 or c == 255:
+                        continue
+                    if c not in sub_class_list:
+                        continue
+                    tmp_label = np.zeros_like(label)
+                    target_pix = np.where(label == c)
+                    tmp_label[target_pix[0], target_pix[1]] = 1
+                    # Shaban uses these lines to remove small objects:
+                    # if util.change_coordinates(mask, 32.0, 0.0).sum() > 2:
+                    #    filtered_item.append(item)
+                    # which means the mask will be downsampled to 1/32 of the original size and the valid area should be
+                    # larger than 2, therefore the area in original size should be accordingly larger than 2 * 32 * 32
+                    if tmp_label.sum() >= 2 * 32 * 32:
+                        label_class.append(c)
+            else:
+                for c in doc['class']:
+                    if c not in sub_class_list:
+                        continue
                     label_class.append(c)
+
             if len(label_class) > 0:
                 self._doc_list.append(doc)
                 for c in label_class:
