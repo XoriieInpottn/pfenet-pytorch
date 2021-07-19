@@ -15,14 +15,6 @@ def resize(feat, size):
     return F.interpolate(feat, size=size, mode='bilinear', align_corners=True)
 
 
-def weighted_gap(supp_feat, mask):
-    supp_feat = supp_feat * mask
-    feat_h, feat_w = supp_feat.shape[-2:][0], supp_feat.shape[-2:][1]
-    area = F.avg_pool2d(mask, (supp_feat.size()[2], supp_feat.size()[3])) * feat_h * feat_w + 0.0005
-    supp_feat = F.avg_pool2d(input=supp_feat, kernel_size=supp_feat.shape[-2:]) * feat_h * feat_w / area
-    return supp_feat
-
-
 class PFENet(nn.Module):
 
     def __init__(self,
@@ -58,12 +50,12 @@ class PFENet(nn.Module):
                 m.stride = (1, 1)
 
         self.down_query = nn.Sequential(
-            nn.Conv2d(backbone_feat_size, feat_size, kernel_size=(1, 1), padding=0, bias=False),
+            nn.Conv2d(backbone_feat_size, feat_size, kernel_size=(1, 1), bias=False),
             nn.ReLU(inplace=True),
             nn.Dropout2d(p=0.5)
         )
         self.down_supp = nn.Sequential(
-            nn.Conv2d(backbone_feat_size, feat_size, kernel_size=(1, 1), padding=0, bias=False),
+            nn.Conv2d(backbone_feat_size, feat_size, kernel_size=(1, 1), bias=False),
             nn.ReLU(inplace=True),
             nn.Dropout2d(p=0.5)
         )
@@ -74,41 +66,41 @@ class PFENet(nn.Module):
         self.inner_cls = nn.ModuleList()
         for i in range(len(self._ppm_scales)):
             self.init_merge.append(nn.Sequential(
-                nn.Conv2d(feat_size * 2 + 1, feat_size, kernel_size=(1, 1), padding=0, bias=False),
-                nn.ReLU(inplace=True),
+                nn.Conv2d(feat_size * 2 + 1, feat_size, kernel_size=(1, 1), bias=False),
+                nn.ReLU(inplace=True)
             ))
             if i > 0:
                 # alpha_conv is used to fuse the feature from the last scale
                 # so at the first scale, there is nothing to conv
                 self.alpha_conv.append(nn.Sequential(
-                    nn.Conv2d(feat_size * 2, feat_size, kernel_size=(1, 1), padding=0, bias=False),
+                    nn.Conv2d(feat_size * 2, feat_size, kernel_size=(1, 1), bias=False),
                     nn.ReLU(inplace=True)
                 ))
             self.beta_conv.append(nn.Sequential(
-                nn.Conv2d(feat_size, feat_size, kernel_size=(3, 3), padding=1, bias=False),
+                nn.Conv2d(feat_size, feat_size, kernel_size=(3, 3), padding=(1, 1), bias=False),
                 nn.ReLU(inplace=True),
-                nn.Conv2d(feat_size, feat_size, kernel_size=(3, 3), padding=1, bias=False),
+                nn.Conv2d(feat_size, feat_size, kernel_size=(3, 3), padding=(1, 1), bias=False),
                 nn.ReLU(inplace=True)
             ))
             self.inner_cls.append(nn.Sequential(
-                nn.Conv2d(feat_size, feat_size, kernel_size=(3, 3), padding=1, bias=False),
+                nn.Conv2d(feat_size, feat_size, kernel_size=(3, 3), padding=(1, 1), bias=False),
                 nn.ReLU(inplace=True),
                 nn.Dropout2d(p=0.1),
                 nn.Conv2d(feat_size, num_classes, kernel_size=(1, 1))
             ))
 
         self.res1 = nn.Sequential(
-            nn.Conv2d(feat_size * len(self._ppm_scales), feat_size, kernel_size=(1, 1), padding=0, bias=False),
-            nn.ReLU(inplace=True),
+            nn.Conv2d(feat_size * len(self._ppm_scales), feat_size, kernel_size=(1, 1), bias=False),
+            nn.ReLU(inplace=True)
         )
         self.res2 = nn.Sequential(
-            nn.Conv2d(feat_size, feat_size, kernel_size=(3, 3), padding=1, bias=False),
+            nn.Conv2d(feat_size, feat_size, kernel_size=(3, 3), padding=(1, 1), bias=False),
             nn.ReLU(inplace=True),
-            nn.Conv2d(feat_size, feat_size, kernel_size=(3, 3), padding=1, bias=False),
-            nn.ReLU(inplace=True),
+            nn.Conv2d(feat_size, feat_size, kernel_size=(3, 3), padding=(1, 1), bias=False),
+            nn.ReLU(inplace=True)
         )
         self.cls = nn.Sequential(
-            nn.Conv2d(feat_size, feat_size, kernel_size=(3, 3), padding=1, bias=False),
+            nn.Conv2d(feat_size, feat_size, kernel_size=(3, 3), padding=(1, 1), bias=False),
             nn.ReLU(inplace=True),
             nn.Dropout2d(p=0.1),
             nn.Conv2d(feat_size, num_classes, kernel_size=(1, 1))
@@ -124,7 +116,7 @@ class PFENet(nn.Module):
                  out_aux: dtype=float32, shape=(num_scales, n, num_classes, output_h, output_w)
         """
         # get the deep feature of the query sample
-        # query_feat_4 is used for generate the pior mask
+        # query_feat_4 is used for generate the prior mask
         # query_feat is used for fusion and prediction
         with torch.no_grad():
             query_feat_0 = self.layer0(qx)
@@ -136,7 +128,7 @@ class PFENet(nn.Module):
         query_feat = self.down_query(query_feat)  # (n, d, h3, w3)
 
         # get the deep feature of the support sample
-        # supp_feat_4 is used for generate the pior mask
+        # supp_feat_4 is used for generate the prior mask
         # supp_feat is used for fusion and prediction
         # not that supp_feat_4 and supp_feat have different shape
         sx_flat = sx.view((-1, *sx.shape[2:]))  # (n, k, c, h, w) -> (nk, c, h, w)
@@ -154,12 +146,12 @@ class PFENet(nn.Module):
             supp_feat_4 = supp_feat_4 * supp_feat_4_mask  # (nk, f, h4, w4)
         supp_feat = torch.cat([supp_feat_3, supp_feat_2], 1)
         supp_feat = self.down_supp(supp_feat)
-        supp_feat = weighted_gap(supp_feat, supp_feat_3_mask)  # (nk, d, 1, 1)
+        supp_feat = self._weighted_gap(supp_feat, supp_feat_3_mask)  # (nk, d, 1, 1)
         supp_feat = supp_feat.view((sx.size(0), -1, *supp_feat.size()[1:]))  # (n, k, d, 1, 1)
         supp_feat = supp_feat.mean(1)  # (n, d, 1, 1)
 
-        corr = self._make_corr(supp_feat_4, query_feat_4, (query_feat.size(2), query_feat.size(3)))
-        pyramid_feat, aux_out = self._pyramid(supp_feat, query_feat, corr)
+        prior = self._make_prior(supp_feat_4, query_feat_4, (query_feat.size(2), query_feat.size(3)))
+        pyramid_feat, aux_out = self._pyramid(supp_feat, query_feat, prior)
 
         feat = self.res1(pyramid_feat)
         feat = self.res2(feat) + feat
@@ -174,25 +166,32 @@ class PFENet(nn.Module):
             return out
 
     @staticmethod
-    def _make_corr(supp_feat_4, query_feat_4, query_feat_hw):
-        q = query_feat_4  # (n, f, h4, w4)
-        s = supp_feat_4  # (nk, f, h4, w4)
-        tmp_query = q
-        tmp_query = tmp_query.view((q.size(0), q.size(1), -1))  # (n, f, h4w4)
-        tmp_query = F.normalize(tmp_query, 2, 1)
-        tmp_supp = s
-        tmp_supp = tmp_supp.view(q.size(0), -1, s.size(1), s.size(2) * s.size(3))  # (n, k, f, h4w4)
-        tmp_supp = F.normalize(tmp_supp, 2, 2)
-        sim = torch.einsum('nda,nkdb->nkab', tmp_query, tmp_supp).max(3)[0]  # (n, k, a)
+    def _weighted_gap(supp_feat, mask):
+        supp_feat = supp_feat * mask
+        feat_h, feat_w = supp_feat.shape[-2:][0], supp_feat.shape[-2:][1]
+        area = F.avg_pool2d(mask, (supp_feat.size()[2], supp_feat.size()[3])) * feat_h * feat_w + 0.0005
+        supp_feat = F.avg_pool2d(input=supp_feat, kernel_size=supp_feat.shape[-2:]) * feat_h * feat_w / area
+        return supp_feat
+
+    @staticmethod
+    def _make_prior(supp_feat, query_feat, out_size):
+        # supp_feat: (nk, c, h, w)
+        # query_feat: (n, c, h, w)
+        n, c, h, w = query_feat.shape
+        query_feat = F.normalize(query_feat, 2, 1)
+        supp_feat = F.normalize(supp_feat, 2, 1)
+        query_feat = query_feat.view((n, c, -1))  # (n, c, hw)
+        supp_feat = supp_feat.view(n, -1, c, h * w)  # (n, k, c, hw)
+        sim = torch.einsum('nca,nkcb->nkab', query_feat, supp_feat).max(3)[0]  # (n, k, hw)
         sim_min = sim.min(2, keepdim=True)[0]  # (n, k, 1)
         sim_max = sim.max(2, keepdim=True)[0]  # (n, k, 1)
         corr = (sim - sim_min) / (sim_max - sim_min + 1e-10)
-        corr = corr.view((corr.size(0), corr.size(1), q.size(2), q.size(3)))  # (n, k, h4, w4)
-        corr = resize(corr, query_feat_hw)
-        corr = corr.mean(1, keepdim=True)  # (n, 1, h4, w4)
+        corr = corr.view((corr.size(0), corr.size(1), h, w))  # (n, k, h, w)
+        corr = resize(corr, out_size)
+        corr = corr.mean(1, keepdim=True)  # (n, 1, h, w)
         return corr
 
-    def _pyramid(self, supp_feat, query_feat, corr_mask):
+    def _pyramid(self, supp_feat, query_feat, prior):
         # supp_feat: (nk, d, 1, 1)
         # query_feat: (n, d, h3, w3)
         query_feat_hw = (query_feat.size(2), query_feat.size(3))
@@ -209,7 +208,7 @@ class PFENet(nn.Module):
                 bin_w = (int(query_feat.size(2) * bin_w), int(query_feat.size(3) * bin_w))
             query_feat_bin = F.adaptive_avg_pool2d(query_feat, (bin_h, bin_w))  # (n, d, bin_h, bin_w)
             supp_feat_bin = supp_feat.expand(-1, -1, bin_h, bin_w)  # (n, d, bin_h, bin_w)
-            corr_mask_bin = resize(corr_mask, (bin_h, bin_w))
+            corr_mask_bin = resize(prior, (bin_h, bin_w))
             merge_feat_bin = torch.cat([query_feat_bin, supp_feat_bin, corr_mask_bin], 1)
             merge_feat_bin = self.init_merge[idx](merge_feat_bin)  # (n, d, bin_h, _bin_w)
 
@@ -265,17 +264,16 @@ class Loss(nn.Module):
 
 def main():
     model = PFENet(output_size=(224, 224))
+    loss_fn = Loss()
+
     sx = torch.normal(0.0, 1.0, (4, 5, 3, 224, 224), dtype=torch.float32)
     sy = torch.randint(0, 1, (4, 5, 224, 224), dtype=torch.int64)
     qx = torch.normal(0.0, 1.0, (4, 3, 224, 224), dtype=torch.float32)
     qy = torch.ones(4, 224, 224, dtype=torch.int64)
 
-    l = Loss()
-
     model.train()
     out, out_aux = model(sx, sy, qx)
-    print(l(out, qy, out_aux))
-
+    print(loss_fn(out, qy, out_aux))
     return 0
 
 
