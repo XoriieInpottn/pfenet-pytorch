@@ -109,11 +109,11 @@ class SegmentationDataset(Dataset):
 
         self._doc_list = []  # type: list[dict]
         self._sub_class_dict = collections.defaultdict(list)
-        for doc in tqdm(docs):
-            label = np.load(doc['label'])
+        for doc in tqdm(docs, leave=False):
             label_class = []
 
             if parse_class:
+                label = np.load(doc['label'])
                 for c in np.unique(label):
                     c = int(c)
                     if c == 0 or c == 255:
