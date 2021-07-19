@@ -113,10 +113,10 @@ class Trainer(object):
 
             self._model.eval()
             iou_result = self._evaluate()
-            loop.set_description(
+            loop.write(
                 f'[{epoch + 1}/{self._args.num_epochs}] '
                 f'L={loss_g:.06f} '
-                f'precision={iou_result:.02%} '
+                f'mIOU={iou_result:.02%} '
             )
 
     def _evaluate(self):
