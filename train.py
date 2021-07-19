@@ -66,10 +66,10 @@ class Trainer(object):
         self._test_loader = DataLoader(
             test_dataset,
             batch_size=self._args.batch_size,
-            shuffle=True,
             num_workers=10,
             pin_memory=True
         )
+
     def _create_model(self):
         self._model = pfenet.PFENet(output_size=self._args.image_size)
         self._parameters = [
@@ -101,14 +101,13 @@ class Trainer(object):
             self._model.train()
             loop = tqdm(self._train_loader, dynamic_ncols=True, leave=False)
             for supp_doc, query_doc in loop:
-                # loss, lr = self._train_step(
-                #     supp_doc['image'],
-                #     supp_doc['label'],
-                #     query_doc['image'],
-                #     query_doc['label']
-                # )
-                # loss = float(loss.numpy())
-                loss = 0.0
+                loss, lr = self._train_step(
+                    supp_doc['image'],
+                    supp_doc['label'],
+                    query_doc['image'],
+                    query_doc['label']
+                )
+                loss = float(loss.numpy())
                 loss_g = 0.9 * loss_g + 0.1 * loss
                 loop.set_description(f'[{epoch + 1}/{self._args.num_epochs}] L={loss_g:.06f} lr={lr:.01e}', False)
             if (epoch + 1) % 10 == 0 or (epoch + 1) == self._args.num_epochs:
@@ -120,10 +119,8 @@ class Trainer(object):
                     f'precision={iou_result:.02%} '
                 )
 
-
-
     def _evaluate(self, num_loops):
-        iou_list=[]
+        iou_list = []
         for epoch in range(num_loops):
             loop = tqdm(self._test_loader, dynamic_ncols=True, leave=False)
             for supp_doc, query_doc in loop:
@@ -136,12 +133,12 @@ class Trainer(object):
                 output = output.view(-1)
                 target = target.view(-1)
 
-                pred_inds = (output >0)
-                target_inds = (target >0)
+                pred_inds = (output > 0)
+                target_inds = (target > 0)
 
                 intersection = (pred_inds[target_inds]).long().sum().data.cpu[0]
-                union = pred_inds.long().sum().data.cpu[0] + target_inds.long().sum().data.cup[0]-intersection
-                iou=loat(intersection) / float(union)
+                union = pred_inds.long().sum().data.cpu[0] + target_inds.long().sum().data.cup[0] - intersection
+                iou = float(intersection) / float(union)
                 iou_list.append(iou)
         return iou_list.mean()
 
