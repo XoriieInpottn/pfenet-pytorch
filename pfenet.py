@@ -159,10 +159,13 @@ class PFENet(nn.Module):
         supp_feat = supp_feat.mean(1)  # (n, d, 1, 1)
 
         prior = self._make_prior(supp_feat_4, query_feat_4, (query_feat.size(2), query_feat.size(3)))
-        pyramid_feat, aux_out = self._pyramid(supp_feat, query_feat, prior)
+        feat, aux_out = self._pyramid(supp_feat, query_feat, prior)
 
-        feat = self.res1(pyramid_feat)
+        # feat = resize(feat, (feat.size(2) * 2, feat.size(3) * 2))
+        feat = self.res1(feat)
+        # feat = resize(feat, (feat.size(2) * 2, feat.size(3) * 2))
         feat = self.res2(feat) + feat
+        # feat = resize(feat, (feat.size(2) * 2, feat.size(3) * 2))
         out = self.cls(feat)
 
         if self._output_size is not None:
@@ -174,11 +177,11 @@ class PFENet(nn.Module):
             return out
 
     @staticmethod
-    def _weighted_gap(supp_feat, mask):
+    def _weighted_gap(supp_feat, mask, eps=1e-4):
         supp_feat = supp_feat * mask
         feat_h, feat_w = supp_feat.shape[-2:][0], supp_feat.shape[-2:][1]
-        area = F.avg_pool2d(mask, (supp_feat.size()[2], supp_feat.size()[3])) * feat_h * feat_w + 0.0005
-        supp_feat = F.avg_pool2d(input=supp_feat, kernel_size=supp_feat.shape[-2:]) * feat_h * feat_w / area
+        area = F.avg_pool2d(mask, (supp_feat.size()[2], supp_feat.size()[3])) * feat_h * feat_w
+        supp_feat = F.avg_pool2d(supp_feat, supp_feat.shape[-2:]) * feat_h * feat_w / (area + eps)
         return supp_feat
 
     @staticmethod
@@ -344,7 +347,7 @@ def get_resnet50_layers(pretrained=True):
 
 
 def main():
-    model = PFENet(*get_resnet18_layers(), output_size=(473, 473))
+    model = PFENet(*get_resnet34_layers(), output_size=(473, 473))
     loss_fn = Loss()
 
     sx = torch.normal(0.0, 1.0, (4, 5, 3, 473, 473), dtype=torch.float32)
@@ -354,6 +357,7 @@ def main():
 
     model.train()
     out, out_aux = model(sx, sy, qx)
+    print(out.shape)
     print(loss_fn(out, qy, out_aux))
     return 0
 

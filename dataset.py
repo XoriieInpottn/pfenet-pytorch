@@ -29,13 +29,18 @@ def image_to_tensor(image: np.ndarray) -> torch.Tensor:
     :param image: np.ndarray, dtype=uint8, shape=(h, w, c)
     :return: torch.Tensor, dtype=float32, shape=(c, h, w)
     """
-    tensor = torch.tensor(image, dtype=torch.float32) / 255.0
-    tensor = (tensor - MEAN) / STD
+    tensor = torch.tensor(image, dtype=torch.float32)
+    tensor = (tensor / 255.0 - MEAN) / STD
     tensor = tensor.permute((2, 0, 1))
     return tensor
 
 
 def tensor_to_image(tensor: torch.Tensor) -> np.ndarray:
+    """Convert a torch tensor back to an image.
+
+    :param tensor: torch.Tensor, dtype=float32, shape=(c, h, w)
+    :return: np.ndarray, dtype=uint8, shape=(h, w, c)
+    """
     tensor = tensor.permute((1, 2, 0))
     tensor = (tensor * STD + MEAN) * 255.0
     tensor = torch.clip(tensor, 0, 255)
@@ -53,6 +58,11 @@ def label_to_tensor(label: np.ndarray) -> torch.Tensor:
 
 
 def tensor_to_label(tensor: torch.Tensor) -> np.ndarray:
+    """Convert a torch tensor to back to a label.
+
+    :param tensor: torch.Tensor, dtype=int64, shape=(h, w)
+    :return: np.ndarray, dtype=uint8, shape=(h, w)
+    """
     return np.array(tensor.numpy(), np.uint8)
 
 

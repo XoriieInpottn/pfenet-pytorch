@@ -77,7 +77,7 @@ class Trainer(object):
 
     def _create_model(self):
         self._model = pfenet.PFENet(
-            *pfenet.get_vgg16_layers(),
+            *pfenet.get_resnet34_layers(),
             output_size=self._args.image_size
         )
         self._model = self._model.to(self._device)
