@@ -8,40 +8,6 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-from torchvision.models import vgg
-
-
-# import vgg
-
-
-def get_vgg16_layer():
-    model = vgg.vgg16_bn(pretrained=True)
-    layer0_idx = range(0, 7)
-    layer1_idx = range(7, 14)
-    layer2_idx = range(14, 24)
-    layer3_idx = range(24, 34)
-    layer4_idx = range(34, 43)
-    layers_0 = []
-    layers_1 = []
-    layers_2 = []
-    layers_3 = []
-    layers_4 = []
-    for idx in layer0_idx:
-        layers_0 += [model.features[idx]]
-    for idx in layer1_idx:
-        layers_1 += [model.features[idx]]
-    for idx in layer2_idx:
-        layers_2 += [model.features[idx]]
-    for idx in layer3_idx:
-        layers_3 += [model.features[idx]]
-    for idx in layer4_idx:
-        layers_4 += [model.features[idx]]
-    layer0 = nn.Sequential(*layers_0)
-    layer1 = nn.Sequential(*layers_1)
-    layer2 = nn.Sequential(*layers_2)
-    layer3 = nn.Sequential(*layers_3)
-    layer4 = nn.Sequential(*layers_4)
-    return layer0, layer1, layer2, layer3, layer4, 512 + 256
 
 
 def resize(feat, size):
@@ -76,28 +42,6 @@ class PFENet(nn.Module):
         self.layer2 = _no_update(layer2)
         self.layer3 = _no_update(layer3)
         self.layer4 = _no_update(layer4)
-
-        # resnet = resnet50(True)
-        # self.layer0 = nn.Sequential(
-        #     resnet.conv1, resnet.bn1, resnet.relu,
-        #     # resnet.conv2, resnet.bn2, resnet.relu2,
-        #     # resnet.conv3, resnet.bn3, resnet.relu3,
-        #     resnet.maxpool
-        # )
-        # self.layer1 = resnet.layer1
-        # self.layer2 = resnet.layer2
-        # self.layer3 = resnet.layer3
-        # self.layer4 = resnet.layer4
-        # for n, m in self.layer3.named_modules():
-        #     if 'conv2' in n:
-        #         m.dilation, m.padding, m.stride = (2, 2), (2, 2), (1, 1)
-        #     elif 'downsample.0' in n:
-        #         m.stride = (1, 1)
-        # for n, m in self.layer4.named_modules():
-        #     if 'conv2' in n:
-        #         m.dilation, m.padding, m.stride = (4, 4), (4, 4), (1, 1)
-        #     elif 'downsample.0' in n:
-        #         m.stride = (1, 1)
 
         self.down_query = nn.Sequential(
             nn.Conv2d(backbone_feat_size, feat_size, kernel_size=(1, 1), bias=False),
@@ -326,9 +270,81 @@ class Loss(nn.Module):
         return loss + loss_aux
 
 
+def get_vgg16_layers(pretrained=True):
+    from torchvision.models import vgg
+    net = vgg.vgg16_bn(pretrained=pretrained)
+    layer0_idx = range(0, 7)
+    layer1_idx = range(7, 14)
+    layer2_idx = range(14, 24)
+    layer3_idx = range(24, 34)
+    layer4_idx = range(34, 43)
+    layers_0 = []
+    layers_1 = []
+    layers_2 = []
+    layers_3 = []
+    layers_4 = []
+    for idx in layer0_idx:
+        layers_0 += [net.features[idx]]
+    for idx in layer1_idx:
+        layers_1 += [net.features[idx]]
+    for idx in layer2_idx:
+        layers_2 += [net.features[idx]]
+    for idx in layer3_idx:
+        layers_3 += [net.features[idx]]
+    for idx in layer4_idx:
+        layers_4 += [net.features[idx]]
+    layer0 = nn.Sequential(*layers_0)
+    layer1 = nn.Sequential(*layers_1)
+    layer2 = nn.Sequential(*layers_2)
+    layer3 = nn.Sequential(*layers_3)
+    layer4 = nn.Sequential(*layers_4)
+    return layer0, layer1, layer2, layer3, layer4, 512 + 256
+
+
+def get_resnet18_layers(pretrained=True):
+    from torchvision.models import resnet
+    net = resnet.resnet18(pretrained=pretrained)
+    layer0 = nn.Sequential(
+        net.conv1, net.bn1, net.relu,
+        net.maxpool
+    )
+    layer1 = net.layer1
+    layer2 = net.layer2
+    layer3 = net.layer3
+    layer4 = net.layer4
+    return layer0, layer1, layer2, layer3, layer4, 256 + 128
+
+
+def get_resnet34_layers(pretrained=True):
+    from torchvision.models import resnet
+    net = resnet.resnet18(pretrained=pretrained)
+    layer0 = nn.Sequential(
+        net.conv1, net.bn1, net.relu,
+        net.maxpool
+    )
+    layer1 = net.layer1
+    layer2 = net.layer2
+    layer3 = net.layer3
+    layer4 = net.layer4
+    return layer0, layer1, layer2, layer3, layer4, 256 + 128
+
+
+def get_resnet50_layers(pretrained=True):
+    from torchvision.models import resnet
+    net = resnet.resnet50(pretrained=pretrained)
+    layer0 = nn.Sequential(
+        net.conv1, net.bn1, net.relu,
+        net.maxpool
+    )
+    layer1 = net.layer1
+    layer2 = net.layer2
+    layer3 = net.layer3
+    layer4 = net.layer4
+    return layer0, layer1, layer2, layer3, layer4, 1024 + 512
+
+
 def main():
-    *layers, feat_size = get_vgg16_layer()
-    model = PFENet(*layers, feat_size, output_size=(473, 473))
+    model = PFENet(*get_resnet18_layers(), output_size=(473, 473))
     loss_fn = Loss()
 
     sx = torch.normal(0.0, 1.0, (4, 5, 3, 473, 473), dtype=torch.float32)

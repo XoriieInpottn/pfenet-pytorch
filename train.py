@@ -25,11 +25,11 @@ class Trainer(object):
         parser = argparse.ArgumentParser()
         parser.add_argument('--gpu', type=str, default='0', help='Which GPU to use.')
         parser.add_argument('--data-path', required=True, help='Path of the directory that contains the data files.')
-        parser.add_argument('--batch-size', type=int, default=8, help='Batch size.')
+        parser.add_argument('--batch-size', type=int, default=4, help='Batch size.')
         parser.add_argument('--num-epochs', type=int, default=100, help='The number of epochs to train.')
-        parser.add_argument('--max-lr', type=float, default=1e-4, help='The maximum value of learning rate.')
-        parser.add_argument('--weight-decay', type=float, default=0.1, help='The weight decay value.')
-        parser.add_argument('--optimizer', default='AdamW', help='Name of the optimizer to use.')
+        parser.add_argument('--max-lr', type=float, default=2.5e-3, help='The maximum value of learning rate.')
+        parser.add_argument('--weight-decay', type=float, default=1e-4, help='The weight decay value.')
+        parser.add_argument('--optimizer', default='MomentumSGD', help='Name of the optimizer to use.')
 
         parser.add_argument('--num-shots', type=int, default=5)
         parser.add_argument('--image-size', type=int, default=473)
@@ -50,12 +50,17 @@ class Trainer(object):
             image_size=self._args.image_size,
             is_train=True
         )
+
+        def worker_init_fn(worker_id):
+            np.random.seed(np.random.get_state()[1][0] + worker_id)
+
         self._train_loader = DataLoader(
             train_dataset,
             batch_size=self._args.batch_size,
             shuffle=True,
             num_workers=10,
-            pin_memory=True
+            pin_memory=True,
+            worker_init_fn=worker_init_fn
         )
         test_dataset = dataset.SegmentationDataset(
             self._args.data_path,
@@ -72,7 +77,7 @@ class Trainer(object):
 
     def _create_model(self):
         self._model = pfenet.PFENet(
-            *pfenet.get_vgg16_layer(),
+            *pfenet.get_vgg16_layers(),
             output_size=self._args.image_size
         )
         self._model = self._model.to(self._device)
