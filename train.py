@@ -27,8 +27,8 @@ class Trainer(object):
         parser.add_argument('--data-path', required=True, help='Path of the directory that contains the data files.')
         parser.add_argument('--batch-size', type=int, default=8, help='Batch size.')
         parser.add_argument('--num-epochs', type=int, default=100, help='The number of epochs to train.')
-        parser.add_argument('--max-lr', type=float, default=5e-4, help='The maximum value of learning rate.')
-        parser.add_argument('--weight-decay', type=float, default=0.2, help='The weight decay value.')
+        parser.add_argument('--max-lr', type=float, default=1e-4, help='The maximum value of learning rate.')
+        parser.add_argument('--weight-decay', type=float, default=0.1, help='The weight decay value.')
         parser.add_argument('--optimizer', default='AdamW', help='Name of the optimizer to use.')
 
         parser.add_argument('--num-shots', type=int, default=5)
@@ -76,17 +76,9 @@ class Trainer(object):
             output_size=self._args.image_size
         )
         self._model = self._model.to(self._device)
-        self._parameters = [
-            *self._model.down_query.parameters(),
-            *self._model.down_supp.parameters(),
-            *self._model.init_merge.parameters(),
-            *self._model.alpha_conv.parameters(),
-            *self._model.beta_conv.parameters(),
-            *self._model.inner_cls.parameters(),
-            *self._model.res1.parameters(),
-            *self._model.res2.parameters(),
-            *self._model.cls.parameters(),
-        ]
+
+        # "requires_grad" of of the backbone parameters are set to False
+        self._parameters = [p for p in self._model.parameters() if p.requires_grad]
         self._loss = pfenet.Loss()
 
     def _create_optimizer(self):

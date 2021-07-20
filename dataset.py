@@ -85,6 +85,8 @@ class SegmentationDataset(Dataset):
             image_size = (image_size, image_size)
         self._transform = AugmenterWrapper([
             iaa.Fliplr(p=0.5),
+            iaa.GaussianBlur((0.0, 1.0)),
+            iaa.Rotate((-10, 10)),
             iaa.PadToFixedSize(500, 500),
             iaa.CropToFixedSize(image_size[1], image_size[0])
         ]) if is_train else AugmenterWrapper([

@@ -328,28 +328,13 @@ class Loss(nn.Module):
 
 def main():
     *layers, feat_size = get_vgg16_layer()
-    model = PFENet(*layers, feat_size, output_size=(224, 224))
+    model = PFENet(*layers, feat_size, output_size=(473, 473))
     loss_fn = Loss()
 
-    parameters = [
-        *model.down_query.parameters(),
-        *model.down_supp.parameters(),
-        *model.init_merge.parameters(),
-        *model.alpha_conv.parameters(),
-        *model.beta_conv.parameters(),
-        *model.inner_cls.parameters(),
-        *model.res1.parameters(),
-        *model.res2.parameters(),
-        *model.cls.parameters(),
-    ]
-    print(len(parameters))
-    parameters = [p for p in model.parameters() if p.requires_grad]
-    print(len(parameters))
-
-    sx = torch.normal(0.0, 1.0, (4, 5, 3, 224, 224), dtype=torch.float32)
-    sy = torch.randint(0, 1, (4, 5, 224, 224), dtype=torch.int64)
-    qx = torch.normal(0.0, 1.0, (4, 3, 224, 224), dtype=torch.float32)
-    qy = torch.ones(4, 224, 224, dtype=torch.int64)
+    sx = torch.normal(0.0, 1.0, (4, 5, 3, 473, 473), dtype=torch.float32)
+    sy = torch.randint(0, 1, (4, 5, 473, 473), dtype=torch.int64)
+    qx = torch.normal(0.0, 1.0, (4, 3, 473, 473), dtype=torch.float32)
+    qy = torch.ones(4, 473, 473, dtype=torch.int64)
 
     model.train()
     out, out_aux = model(sx, sy, qx)
