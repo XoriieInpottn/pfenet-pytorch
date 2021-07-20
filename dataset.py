@@ -29,7 +29,7 @@ def image_to_tensor(image: np.ndarray) -> torch.Tensor:
     :param image: np.ndarray, dtype=uint8, shape=(h, w, c)
     :return: torch.Tensor, dtype=float32, shape=(c, h, w)
     """
-    tensor = torch.tensor(image, dtype=torch.float32)
+    tensor = torch.tensor(image, dtype=torch.float32) / 255.0
     tensor = (tensor - MEAN) / STD
     tensor = tensor.permute((2, 0, 1))
     return tensor
@@ -37,7 +37,7 @@ def image_to_tensor(image: np.ndarray) -> torch.Tensor:
 
 def tensor_to_image(tensor: torch.Tensor) -> np.ndarray:
     tensor = tensor.permute((1, 2, 0))
-    tensor = tensor * STD + MEAN
+    tensor = (tensor * STD + MEAN) * 255.0
     tensor = torch.clip(tensor, 0, 255)
     image = np.array(tensor.numpy(), np.uint8)
     return image
@@ -85,7 +85,6 @@ class SegmentationDataset(Dataset):
             image_size = (image_size, image_size)
         self._transform = AugmenterWrapper([
             iaa.Fliplr(p=0.5),
-            iaa.GaussianBlur((0.0, 1.0)),
             iaa.Rotate((-10, 10)),
             iaa.PadToFixedSize(500, 500),
             iaa.CropToFixedSize(image_size[1], image_size[0])
@@ -184,3 +183,29 @@ class SegmentationDataset(Dataset):
             label[target_pix[0], target_pix[1]] = 1
         # label[ignore_pix[0], ignore_pix[1]] = 255
         return label
+
+
+def main():
+    train_dataset = SegmentationDataset(
+        'data/name.json',
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        num_shots=5,
+        image_size=(473, 473),
+        is_train=True
+    )
+    from pfenet import get_vgg16_layer, PFENet
+    *layers, feat_size = get_vgg16_layer()
+    model = PFENet(*layers, feat_size, output_size=(473, 473))
+    for supp_doc, query_doc in train_dataset:
+        image = tensor_to_image(query_doc['image'])
+        label = tensor_to_label(query_doc['label'])
+        _, _, p = model(supp_doc['image'].unsqueeze(0), supp_doc['label'].unsqueeze(0), query_doc['image'].unsqueeze(0))
+        print(p.shape)
+        image = cv.cvtColor(image, cv.COLOR_RGB2BGR)
+        cv.imshow('', p[0][0].detach().numpy())
+        cv.waitKey()
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
