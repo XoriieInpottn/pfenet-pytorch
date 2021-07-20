@@ -8,7 +8,40 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-from torchvision.models import resnet50
+from torchvision.models import vgg
+
+
+# import vgg
+
+
+def get_vgg16_layer():
+    model = vgg.vgg16_bn(pretrained=True)
+    layer0_idx = range(0, 7)
+    layer1_idx = range(7, 14)
+    layer2_idx = range(14, 24)
+    layer3_idx = range(24, 34)
+    layer4_idx = range(34, 43)
+    layers_0 = []
+    layers_1 = []
+    layers_2 = []
+    layers_3 = []
+    layers_4 = []
+    for idx in layer0_idx:
+        layers_0 += [model.features[idx]]
+    for idx in layer1_idx:
+        layers_1 += [model.features[idx]]
+    for idx in layer2_idx:
+        layers_2 += [model.features[idx]]
+    for idx in layer3_idx:
+        layers_3 += [model.features[idx]]
+    for idx in layer4_idx:
+        layers_4 += [model.features[idx]]
+    layer0 = nn.Sequential(*layers_0)
+    layer1 = nn.Sequential(*layers_1)
+    layer2 = nn.Sequential(*layers_2)
+    layer3 = nn.Sequential(*layers_3)
+    layer4 = nn.Sequential(*layers_4)
+    return layer0, layer1, layer2, layer3, layer4, 512 + 256
 
 
 def resize(feat, size):
@@ -18,7 +51,12 @@ def resize(feat, size):
 class PFENet(nn.Module):
 
     def __init__(self,
-                 backbone_feat_size=1024 + 512,
+                 layer0: nn.Module,
+                 layer1: nn.Module,
+                 layer2: nn.Module,
+                 layer3: nn.Module,
+                 layer4: nn.Module,
+                 backbone_feat_size,
                  feat_size=256,
                  num_classes=2,
                  ppm_scales=(60, 30, 15, 8),
@@ -27,27 +65,39 @@ class PFENet(nn.Module):
         self._ppm_scales = ppm_scales
         self._output_size = output_size
 
-        resnet = resnet50(True)
-        self.layer0 = nn.Sequential(
-            resnet.conv1, resnet.bn1, resnet.relu,
-            # resnet.conv2, resnet.bn2, resnet.relu2,
-            # resnet.conv3, resnet.bn3, resnet.relu3,
-            resnet.maxpool
-        )
-        self.layer1 = resnet.layer1
-        self.layer2 = resnet.layer2
-        self.layer3 = resnet.layer3
-        self.layer4 = resnet.layer4
-        for n, m in self.layer3.named_modules():
-            if 'conv2' in n:
-                m.dilation, m.padding, m.stride = (2, 2), (2, 2), (1, 1)
-            elif 'downsample.0' in n:
-                m.stride = (1, 1)
-        for n, m in self.layer4.named_modules():
-            if 'conv2' in n:
-                m.dilation, m.padding, m.stride = (4, 4), (4, 4), (1, 1)
-            elif 'downsample.0' in n:
-                m.stride = (1, 1)
+        def _no_update(layer: nn.Module) -> nn.Module:
+            layer.eval()
+            for p in layer.parameters():
+                p.requires_grad = False
+            return layer
+
+        self.layer0 = _no_update(layer0)
+        self.layer1 = _no_update(layer1)
+        self.layer2 = _no_update(layer2)
+        self.layer3 = _no_update(layer3)
+        self.layer4 = _no_update(layer4)
+
+        # resnet = resnet50(True)
+        # self.layer0 = nn.Sequential(
+        #     resnet.conv1, resnet.bn1, resnet.relu,
+        #     # resnet.conv2, resnet.bn2, resnet.relu2,
+        #     # resnet.conv3, resnet.bn3, resnet.relu3,
+        #     resnet.maxpool
+        # )
+        # self.layer1 = resnet.layer1
+        # self.layer2 = resnet.layer2
+        # self.layer3 = resnet.layer3
+        # self.layer4 = resnet.layer4
+        # for n, m in self.layer3.named_modules():
+        #     if 'conv2' in n:
+        #         m.dilation, m.padding, m.stride = (2, 2), (2, 2), (1, 1)
+        #     elif 'downsample.0' in n:
+        #         m.stride = (1, 1)
+        # for n, m in self.layer4.named_modules():
+        #     if 'conv2' in n:
+        #         m.dilation, m.padding, m.stride = (4, 4), (4, 4), (1, 1)
+        #     elif 'downsample.0' in n:
+        #         m.stride = (1, 1)
 
         self.down_query = nn.Sequential(
             nn.Conv2d(backbone_feat_size, feat_size, kernel_size=(1, 1), bias=False),
@@ -106,6 +156,16 @@ class PFENet(nn.Module):
             nn.Conv2d(feat_size, num_classes, kernel_size=(1, 1))
         )
 
+    def train(self, mode: bool = True):
+        if not isinstance(mode, bool):
+            raise ValueError("training mode is expected to be boolean")
+        self.training = mode
+        for module in self.children():
+            if module in {self.layer0, self.layer1, self.layer2, self.layer3, self.layer4}:
+                continue
+            module.train(mode)
+        return self
+
     def forward(self, sx, sy, qx):
         """PFENet
 
@@ -124,6 +184,8 @@ class PFENet(nn.Module):
             query_feat_2 = self.layer2(query_feat_1)
             query_feat_3 = self.layer3(query_feat_2)
             query_feat_4 = self.layer4(query_feat_3)  # (n, f, h4, w4)
+            if query_feat_2.shape[2:4] != query_feat_3.shape[2:4]:
+                query_feat_2 = resize(query_feat_2, (query_feat_3.size(2), query_feat_3.size(3)))
         query_feat = torch.cat([query_feat_3, query_feat_2], 1)
         query_feat = self.down_query(query_feat)  # (n, d, h3, w3)
 
@@ -144,6 +206,8 @@ class PFENet(nn.Module):
             supp_feat_4_hw = (supp_feat_4.size(2), supp_feat_4.size(3))
             supp_feat_4_mask = resize(sy_flat, supp_feat_4_hw)
             supp_feat_4 = supp_feat_4 * supp_feat_4_mask  # (nk, f, h4, w4)
+            if supp_feat_2.shape[2:4] != supp_feat_3.shape[2:4]:
+                supp_feat_2 = resize(supp_feat_2, (supp_feat_3.size(2), supp_feat_3.size(3)))
         supp_feat = torch.cat([supp_feat_3, supp_feat_2], 1)
         supp_feat = self.down_supp(supp_feat)
         supp_feat = self._weighted_gap(supp_feat, supp_feat_3_mask)  # (nk, d, 1, 1)
@@ -263,8 +327,24 @@ class Loss(nn.Module):
 
 
 def main():
-    model = PFENet(output_size=(224, 224))
+    *layers, feat_size = get_vgg16_layer()
+    model = PFENet(*layers, feat_size, output_size=(224, 224))
     loss_fn = Loss()
+
+    parameters = [
+        *model.down_query.parameters(),
+        *model.down_supp.parameters(),
+        *model.init_merge.parameters(),
+        *model.alpha_conv.parameters(),
+        *model.beta_conv.parameters(),
+        *model.inner_cls.parameters(),
+        *model.res1.parameters(),
+        *model.res2.parameters(),
+        *model.cls.parameters(),
+    ]
+    print(len(parameters))
+    parameters = [p for p in model.parameters() if p.requires_grad]
+    print(len(parameters))
 
     sx = torch.normal(0.0, 1.0, (4, 5, 3, 224, 224), dtype=torch.float32)
     sy = torch.randint(0, 1, (4, 5, 224, 224), dtype=torch.int64)

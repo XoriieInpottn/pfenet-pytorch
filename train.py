@@ -26,9 +26,9 @@ class Trainer(object):
         parser.add_argument('--gpu', type=str, default='0', help='Which GPU to use.')
         parser.add_argument('--data-path', required=True, help='Path of the directory that contains the data files.')
         parser.add_argument('--batch-size', type=int, default=8, help='Batch size.')
-        parser.add_argument('--num-epochs', type=int, default=50, help='The number of epochs to train.')
-        parser.add_argument('--max-lr', type=float, default=1e-3, help='The maximum value of learning rate.')
-        parser.add_argument('--weight-decay', type=float, default=0.3, help='The weight decay value.')
+        parser.add_argument('--num-epochs', type=int, default=100, help='The number of epochs to train.')
+        parser.add_argument('--max-lr', type=float, default=5e-4, help='The maximum value of learning rate.')
+        parser.add_argument('--weight-decay', type=float, default=0.2, help='The weight decay value.')
         parser.add_argument('--optimizer', default='AdamW', help='Name of the optimizer to use.')
 
         parser.add_argument('--num-shots', type=int, default=5)
@@ -71,7 +71,11 @@ class Trainer(object):
         )
 
     def _create_model(self):
-        self._model = pfenet.PFENet(output_size=self._args.image_size).to(self._device)
+        self._model = pfenet.PFENet(
+            *pfenet.get_vgg16_layer(),
+            output_size=self._args.image_size
+        )
+        self._model = self._model.to(self._device)
         self._parameters = [
             *self._model.down_query.parameters(),
             *self._model.down_supp.parameters(),
@@ -86,12 +90,20 @@ class Trainer(object):
         self._loss = pfenet.Loss()
 
     def _create_optimizer(self):
-        optimizer_class = getattr(optim, self._args.optimizer)
-        self._optimizer = optimizer_class(
-            self._parameters,
-            lr=self._args.max_lr,
-            weight_decay=self._args.weight_decay
-        )
+        if self._args.optimizer == 'MomentumSGD':
+            self._optimizer = optim.SGD(
+                self._parameters,
+                lr=self._args.max_lr,
+                weight_decay=self._args.weight_decay,
+                momentum=0.9
+            )
+        else:
+            optimizer_class = getattr(optim, self._args.optimizer)
+            self._optimizer = optimizer_class(
+                self._parameters,
+                lr=self._args.max_lr,
+                weight_decay=self._args.weight_decay,
+            )
         num_loops = self._args.num_epochs * len(self._train_loader)
         self._scheduler = utils.CosineWarmUpAnnealingLR(self._optimizer, num_loops)
 
