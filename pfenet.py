@@ -347,7 +347,7 @@ def get_resnet50_layers(pretrained=True):
 
 
 def main():
-    model = PFENet(*get_resnet34_layers(), output_size=(473, 473))
+    model = PFENet(*get_vgg16_layers(), output_size=(473, 473))
     loss_fn = Loss()
 
     sx = torch.normal(0.0, 1.0, (4, 5, 3, 473, 473), dtype=torch.float32)

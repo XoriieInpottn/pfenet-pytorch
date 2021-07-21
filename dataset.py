@@ -161,7 +161,8 @@ class SegmentationDataset(Dataset):
             image, label = self._transform(image, label)
         query_doc = {
             'image': image_to_tensor(image),
-            'label': label_to_tensor(label)
+            'label': label_to_tensor(label),
+            'class': class_chosen
         }
 
         supp_image_list = []
