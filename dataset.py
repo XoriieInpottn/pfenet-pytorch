@@ -79,6 +79,9 @@ class AugmenterWrapper(object):
         return image, mask
 
 
+IGNORE_CLASS = 255
+
+
 class SegmentationDataset(Dataset):
     """Dataset for k-shot image segmentation.
     """
@@ -112,10 +115,10 @@ class SegmentationDataset(Dataset):
                 doc['label'] = os.path.join(self._dir_path, doc['label'])
                 docs.append(doc)
 
-        self._doc_list = []  # type: list[dict]
+        self._doc_list = []
         self._sub_class_dict = collections.defaultdict(list)
         for doc in tqdm(docs, leave=False):
-            label_class = []
+            # label_class = []
 
             if parse_class:
                 label = np.load(doc['label'])
@@ -134,28 +137,32 @@ class SegmentationDataset(Dataset):
                     # which means the mask will be downsampled to 1/32 of the original size and the valid area should be
                     # larger than 2, therefore the area in original size should be accordingly larger than 2 * 32 * 32
                     if tmp_label.sum() >= 2 * 32 * 32:
-                        label_class.append(c)
+                        # label_class.append(c)
+                        self._doc_list.append((doc, c))
+                        self._sub_class_dict[c].append(doc)
             else:
                 for c in doc['class']:
                     if c not in sub_class_list:
                         continue
-                    label_class.append(c)
+                    # label_class.append(c)
+                    self._doc_list.append((doc, c))
+                    self._sub_class_dict[c].append(doc)
 
-            if len(label_class) > 0:
-                self._doc_list.append(doc)
-                for c in label_class:
-                    if c in sub_class_list:
-                        self._sub_class_dict[c].append(doc)
+            # if len(label_class) > 0:
+            #     self._doc_list.append(doc)
+            #     for c in label_class:
+            #         if c in sub_class_list:
+            #             self._sub_class_dict[c].append(doc)
 
     def __len__(self):
         return len(self._doc_list)
 
     def __getitem__(self, i):
-        doc = self._doc_list[i]
+        doc, class_chosen = self._doc_list[i]
         image = cv.imread(doc['image'], cv.IMREAD_COLOR)
         image = cv.cvtColor(image, cv.COLOR_BGR2RGB)
         raw_label = np.load(doc['label'])
-        class_chosen = random.choice([int(a) for a in np.unique(raw_label) if a in self._sub_class_dict])
+        # class_chosen = random.choice([int(a) for a in np.unique(raw_label) if a in self._sub_class_dict])
         label = self._make_label(raw_label, class_chosen)
         if callable(self._transform):
             image, label = self._transform(image, label)
@@ -188,9 +195,29 @@ class SegmentationDataset(Dataset):
     def _make_label(raw_label, class_chosen):
         label = np.zeros_like(raw_label)
         target_pix = np.where(raw_label == class_chosen)
-        # ignore_pix = np.where(raw_label == 255)
+        ignore_pix = np.where(raw_label == IGNORE_CLASS)
         label[:, :] = 0
         if target_pix[0].shape[0] > 0:
             label[target_pix[0], target_pix[1]] = 1
-        # label[ignore_pix[0], ignore_pix[1]] = 255
+        label[ignore_pix[0], ignore_pix[1]] = IGNORE_CLASS
         return label
+
+
+def test():
+    ds = SegmentationDataset(
+        'data/name.json',
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        num_shots=5,
+        image_size=(473, 473),
+        is_train=True
+    )
+    print(len(ds))
+    for supp_doc, query_doc in ds:
+        print('image', query_doc['image'].shape)
+        print('label', query_doc['label'].shape)
+        print('class', query_doc['class'])
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(test())

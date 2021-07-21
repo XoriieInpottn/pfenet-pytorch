@@ -153,6 +153,8 @@ class Trainer(object):
         sy = sy.to(self._device)
         qx = qx.to(self._device)
         qy = qy.to(self._device)
+        sy[torch.where(torch.eq(sy, dataset.IGNORE_CLASS))] = 0  # clear the "ignore" class
+        qy[torch.where(torch.eq(qy, dataset.IGNORE_CLASS))] = 0  # clear the "ignore" class
         pred, pred_aux = self._model(sx, sy, qx)
         loss = self._loss(pred, qy, pred_aux)
         loss.backward()
@@ -165,6 +167,7 @@ class Trainer(object):
         sx = sx.to(self._device)
         sy = sy.to(self._device)
         qx = qx.to(self._device)
+        sy[torch.where(torch.eq(sy, dataset.IGNORE_CLASS))] = 0  # clear the "ignore" class
         pred = self._model(sx, sy, qx)
         qy_ = torch.argmax(pred, 1)
         return qy_.detach().cpu()
