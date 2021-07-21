@@ -35,7 +35,7 @@ class Evaluate(object) :
             union = ((pred[i] == 1) | (gt_mask[i] == 1)).sum((0, 1))
     
             iou = float(intersection) / float(union)
-            print(iou)
+   
 
             self._fb_iou.append(iou)
             if class_num[i] in self._miou_dict:
