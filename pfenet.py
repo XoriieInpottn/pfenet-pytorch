@@ -161,11 +161,8 @@ class PFENet(nn.Module):
         prior = self._make_prior(supp_feat_4, query_feat_4, (query_feat.size(2), query_feat.size(3)))
         feat, aux_out = self._pyramid(supp_feat, query_feat, prior)
 
-        # feat = resize(feat, (feat.size(2) * 2, feat.size(3) * 2))
         feat = self.res1(feat)
-        # feat = resize(feat, (feat.size(2) * 2, feat.size(3) * 2))
         feat = self.res2(feat) + feat
-        # feat = resize(feat, (feat.size(2) * 2, feat.size(3) * 2))
         out = self.cls(feat)
 
         if self._output_size is not None:
@@ -196,11 +193,11 @@ class PFENet(nn.Module):
         sim = torch.einsum('nca,nkcb->nkab', query_feat, supp_feat).max(3)[0]  # (n, k, hw)
         sim_min = sim.min(2, keepdim=True)[0]  # (n, k, 1)
         sim_max = sim.max(2, keepdim=True)[0]  # (n, k, 1)
-        corr = (sim - sim_min) / (sim_max - sim_min + 1e-10)
-        corr = corr.view((corr.size(0), corr.size(1), h, w))  # (n, k, h, w)
-        corr = resize(corr, out_size)
-        corr = corr.mean(1, keepdim=True)  # (n, 1, h, w)
-        return corr
+        prior = (sim - sim_min) / (sim_max - sim_min + 1e-10)
+        prior = prior.view((prior.size(0), prior.size(1), h, w))  # (n, k, h, w)
+        prior = resize(prior, out_size)
+        prior = prior.mean(1, keepdim=True)  # (n, 1, h, w)
+        return prior
 
     def _pyramid(self, supp_feat, query_feat, prior):
         # supp_feat: (nk, d, 1, 1)

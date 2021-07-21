@@ -14,6 +14,7 @@ from typing import Iterable
 import cv2 as cv
 import numpy as np
 import torch
+from PIL import Image
 from imgaug import SegmentationMapsOnImage
 from imgaug import augmenters as iaa
 from torch.utils.data import Dataset
@@ -97,13 +98,15 @@ class SegmentationDataset(Dataset):
         if not isinstance(image_size, (tuple, list)):
             image_size = (image_size, image_size)
         self._transform = AugmenterWrapper([
-            iaa.Fliplr(p=0.5),
-            iaa.Rotate((-10, 10)),
-            iaa.PadToFixedSize(500, 500),
-            iaa.CropToFixedSize(image_size[1], image_size[0])
+            iaa.Resize({'longer-side': (473, 500), 'shorter-side': 'keep-aspect-ratio'}, 'linear'),
+            iaa.Fliplr(0.5),
+            iaa.Rotate((-10, 10), cval=127),
+            iaa.GaussianBlur((0.0, 0.1)),
+            iaa.PadToAspectRatio(1.0, pad_cval=127, position='center-center'),
+            iaa.CropToFixedSize(473, 473)
         ]) if is_train else AugmenterWrapper([
-            iaa.PadToFixedSize(500, 500),
-            iaa.CenterCropToFixedSize(image_size[1], image_size[0])
+            iaa.Resize({'longer-side': 473, 'shorter-side': 'keep-aspect-ratio'}, 'linear'),
+            iaa.PadToAspectRatio(1.0, pad_cval=127, position='center-center')
         ])
 
         self._dir_path = os.path.dirname(path)
@@ -211,11 +214,23 @@ def test():
         image_size=(473, 473),
         is_train=True
     )
-    print(len(ds))
-    for supp_doc, query_doc in ds:
-        print('image', query_doc['image'].shape)
-        print('label', query_doc['label'].shape)
-        print('class', query_doc['class'])
+    for supp_doc, query_doc in tqdm(ds):
+        pass
+    exit()
+    from torch.utils.data import DataLoader
+    loader = DataLoader(
+        ds,
+        batch_size=8,
+        shuffle=True,
+        num_workers=2,
+        pin_memory=True
+    )
+    print(len(loader))
+    for supp_doc, query_doc in tqdm(loader):
+        pass
+        # print('image', query_doc['image'].shape)
+        # print('label', query_doc['label'].shape)
+        # print('class', query_doc['class'])
     return 0
 
 
