@@ -108,8 +108,6 @@ class SegmentationDataset(Dataset):
         self._doc_list = []
         self._sub_class_dict = collections.defaultdict(list)
         for doc in tqdm(docs, leave=False):
-            # label_class = []
-
             if parse_class:
                 label = np.load(doc['label'])
                 for c in np.unique(label):
@@ -134,15 +132,8 @@ class SegmentationDataset(Dataset):
                 for c in doc['class']:
                     if c not in sub_class_list:
                         continue
-                    # label_class.append(c)
                     self._doc_list.append((doc, c))
                     self._sub_class_dict[c].append(doc)
-
-            # if len(label_class) > 0:
-            #     self._doc_list.append(doc)
-            #     for c in label_class:
-            #         if c in sub_class_list:
-            #             self._sub_class_dict[c].append(doc)
 
     def __len__(self):
         return len(self._doc_list)
