@@ -8,6 +8,7 @@
 import argparse
 import os
 
+import cv2 as cv
 import numpy as np
 import torch
 from torch import optim
@@ -15,9 +16,9 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 import dataset
+import evaluate
 import pfenet
 import utils
-from evaluate import IouMeter
 
 
 class Trainer(object):
@@ -131,24 +132,29 @@ class Trainer(object):
             )
 
     def _evaluate(self):
-        meter = IouMeter(dataset.IGNORE_CLASS)
+        meter = evaluate.IouMeter(dataset.IGNORE_CLASS)
         loop = tqdm(self._test_loader, dynamic_ncols=True, leave=False)
-        for supp_doc, query_doc in loop:
+        for i, (supp_doc, query_doc) in enumerate(loop):
+            image = query_doc['image'].numpy()
             output = self._predict_step(
                 supp_doc['image'],
                 supp_doc['label'],
                 query_doc['image']
-            )
-            target = query_doc['label']  # (n, h, w)
-
-            output = output.numpy()
-            target = target.numpy()
+            ).numpy()
+            target = query_doc['label'].numpy()  # (n, h, w)
             class_list = [int(clazz) for clazz in query_doc['class']]
 
             meter.update(output, target, class_list)
             m_iou = meter.m_iou()
-
             loop.set_description(f'mIOU={m_iou:0.2%}')
+
+            for j, (image_i, label_i) in enumerate(zip(image, output)):
+                image_i = dataset.decode_image(image_i)
+                label_i = dataset.decode_label(label_i)
+                image_with_mask = evaluate.draw_mask(image_i, label_i)
+                image_with_mask = cv.cvtColor(image_with_mask, cv.COLOR_RGB2BGR)
+                cv.imwrite(os.path.join(self._args.output_dir, f'{i:04d}-{j:04d}.jpg'), image_with_mask)
+
         return meter.m_iou(), meter.fb_iou()
 
     def _train_step(self, sx, sy, qx, qy):

@@ -8,6 +8,7 @@
 import collections
 from typing import List
 
+import cv2 as cv
 import numpy as np
 
 
@@ -36,6 +37,7 @@ class IouMeter(object):
         """
         assert len(pred) == len(target) == len(class_list)
         for pred_i, target_i, class_i in zip(pred, target, class_list):
+            pred_i = pred_i.copy()  # if you don't copy, you will corrupt the original input
             pred_i[np.where(target_i == self._ignore_class)] = self._ignore_class
 
             inter = ((pred_i == 1) & (target_i == 1)).sum()
@@ -62,3 +64,11 @@ class IouMeter(object):
         iou_fg = self._inter_fg / (self._union_fg + self._eps)
         iou_bg = self._inter_bg / (self._union_bg + self._eps)
         return (iou_fg + iou_bg) * 0.5
+
+
+def draw_mask(image, mask):
+    mask = mask.astype(np.uint8)
+    mask = np.clip(mask, 0, 1) * 255
+    mask = np.stack([mask, mask, np.zeros_like(mask)], 2)
+    image = cv.addWeighted(image, 0.5, mask, 0.5, 0)
+    return image
