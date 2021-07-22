@@ -24,47 +24,36 @@ MEAN = np.array([0.485, 0.456, 0.406], np.float32)
 STD = np.array([0.229, 0.224, 0.225], np.float32)
 
 
-def image_to_tensor(image: np.ndarray) -> torch.Tensor:
-    """Convert an image to torch tensor.
+def encode_image(image: np.ndarray) -> np.ndarray:
+    """Convert an image to float32 and CHW format.
 
     :param image: np.ndarray, dtype=uint8, shape=(h, w, c)
-    :return: torch.Tensor, dtype=float32, shape=(c, h, w)
+    :return: np.ndarray, dtype=float32, shape=(c, h, w)
     """
-    tensor = torch.tensor(image, dtype=torch.float32)
-    tensor = (tensor / 255.0 - MEAN) / STD
-    tensor = tensor.permute((2, 0, 1))
-    return tensor
-
-
-def tensor_to_image(tensor: torch.Tensor) -> np.ndarray:
-    """Convert a torch tensor back to an image.
-
-    :param tensor: torch.Tensor, dtype=float32, shape=(c, h, w)
-    :return: np.ndarray, dtype=uint8, shape=(h, w, c)
-    """
-    tensor = tensor.permute((1, 2, 0))
-    tensor = (tensor * STD + MEAN) * 255.0
-    tensor = torch.clip(tensor, 0, 255)
-    image = np.array(tensor.numpy(), np.uint8)
+    image = image.astype(np.float32)
+    image = (image / 255.0 - MEAN) / STD
+    image = np.transpose(image, (2, 0, 1))
     return image
 
 
-def label_to_tensor(label: np.ndarray) -> torch.Tensor:
-    """Convert a label to torch tensor.
+def decode_image(tensor: np.ndarray) -> np.ndarray:
+    """Convert float tensor back to an image.
 
-    :param label: np.ndarray, dtype=uint8, shape=(h, w)
-    :return: torch.Tensor, dtype=int64, shape=(h, w)
+    :param tensor: np.ndarray, dtype=float32, shape=(c, h, w)
+    :return: np.ndarray, dtype=uint8, shape=(h, w, c)
     """
-    return torch.tensor(label, dtype=torch.int64)
+    tensor = np.transpose(tensor, (1, 2, 0))
+    tensor = (tensor * STD + MEAN) * 255.0
+    tensor = np.clip(tensor, 0, 255)
+    return tensor.astype(np.uint8)
 
 
-def tensor_to_label(tensor: torch.Tensor) -> np.ndarray:
-    """Convert a torch tensor to back to a label.
+def encode_label(label: np.ndarray) -> np.ndarray:
+    return label.astype(np.int64)
 
-    :param tensor: torch.Tensor, dtype=int64, shape=(h, w)
-    :return: np.ndarray, dtype=uint8, shape=(h, w)
-    """
-    return np.array(tensor.numpy(), np.uint8)
+
+def decode_label(tensor: np.ndarray) -> np.ndarray:
+    return tensor.astype(np.uint8)
 
 
 class AugmenterWrapper(object):
@@ -165,13 +154,12 @@ class SegmentationDataset(Dataset):
         image = cv.imread(doc['image'], cv.IMREAD_COLOR)
         image = cv.cvtColor(image, cv.COLOR_BGR2RGB)
         raw_label = np.load(doc['label'])
-        # class_chosen = random.choice([int(a) for a in np.unique(raw_label) if a in self._sub_class_dict])
         label = self._make_label(raw_label, class_chosen)
         if callable(self._transform):
             image, label = self._transform(image, label)
         query_doc = {
-            'image': image_to_tensor(image),
-            'label': label_to_tensor(label),
+            'image': encode_image(image),
+            'label': encode_label(label),
             'class': class_chosen
         }
 
@@ -185,11 +173,11 @@ class SegmentationDataset(Dataset):
             label = self._make_label(raw_label, class_chosen)
             if callable(self._transform):
                 image, label = self._transform(image, label)
-            supp_image_list.append(image_to_tensor(image))
-            supp_label_list.append(label_to_tensor(label))
+            supp_image_list.append(encode_image(image))
+            supp_label_list.append(encode_label(label))
         supp_doc = {
-            'image': torch.stack(supp_image_list),  # (k, c, h, w)
-            'label': torch.stack(supp_label_list)  # (k, h, w)
+            'image': np.stack(supp_image_list),  # (k, c, h, w)
+            'label': np.stack(supp_label_list)  # (k, h, w)
         }
 
         return supp_doc, query_doc
@@ -214,15 +202,15 @@ def test():
         image_size=(473, 473),
         is_train=True
     )
-    for supp_doc, query_doc in tqdm(ds):
-        pass
-    exit()
+    # for supp_doc, query_doc in tqdm(ds):
+    #     pass
+    # exit()
     from torch.utils.data import DataLoader
     loader = DataLoader(
         ds,
         batch_size=8,
         shuffle=True,
-        num_workers=2,
+        num_workers=40,
         pin_memory=True
     )
     print(len(loader))
