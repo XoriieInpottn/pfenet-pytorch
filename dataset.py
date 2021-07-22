@@ -13,8 +13,6 @@ from typing import Iterable
 
 import cv2 as cv
 import numpy as np
-import torch
-from PIL import Image
 from imgaug import SegmentationMapsOnImage
 from imgaug import augmenters as iaa
 from torch.utils.data import Dataset

@@ -17,6 +17,7 @@ from tqdm import tqdm
 import dataset
 import pfenet
 import utils
+from evaluate import ClassIouMeter
 
 
 class Trainer(object):
@@ -121,15 +122,16 @@ class Trainer(object):
                 loop.set_description(f'[{epoch + 1}/{self._args.num_epochs}] L={loss_g:.06f} lr={lr:.01e}', False)
 
             self._model.eval()
-            iou_result = self._evaluate()
+            m_iou, fb_iou = self._evaluate()
             loop.write(
                 f'[{epoch + 1}/{self._args.num_epochs}] '
                 f'L={loss_g:.06f} '
-                f'mIOU={iou_result:.02%} '
+                f'mIOU={m_iou:.02%} '
+                f'fbIOU={fb_iou:.02%} '
             )
 
     def _evaluate(self):
-        iou_list = []
+        meter = ClassIouMeter(dataset.IGNORE_CLASS)
         loop = tqdm(self._test_loader, dynamic_ncols=True, leave=False)
         for supp_doc, query_doc in loop:
             output = self._predict_step(
@@ -139,14 +141,15 @@ class Trainer(object):
             )
             target = query_doc['label']  # (n, h, w)
 
-            intersection = ((output == 1) & (target == 1)).sum((1, 2))
-            union = ((output == 1) | (target == 1)).sum((1, 2))
-            iou = intersection / union
-            iou = iou.numpy()
-            iou_list.extend(iou)
-            iou_current = np.mean(iou_list)
-            loop.set_description(f'IOU={iou_current:0.2%}')
-        return np.mean(iou_list)
+            output = output.numpy()
+            target = target.numpy()
+            class_list = [int(clazz) for clazz in query_doc['class']]
+
+            meter.update(output, target, class_list)
+            m_iou = meter.m_iou()
+
+            loop.set_description(f'mIOU={m_iou:0.2%}')
+        return meter.m_iou(), meter.fb_iou()
 
     def _train_step(self, sx, sy, qx, qy):
         sx = sx.to(self._device)

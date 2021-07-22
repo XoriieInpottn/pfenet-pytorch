@@ -1,50 +1,49 @@
 #!/usr/bin/env python3
 
 """
-@author: Haoyu
+@author: Haoyu, Guangyi
 @since: 2021-07-21
 """
+
+import collections
+from typing import List
 
 import numpy as np
 
 
-class Evaluate(object):
-    """
-    test model 
-    """
+class ClassIouMeter(object):
 
-    def __init__(self):
-        self._miou_dict = {}
+    def __init__(self, ignore_class: int):
+        self._ignore_class = ignore_class
+        self._m_iou_dict = collections.defaultdict(list)
         self._fb_iou = []
 
-    def update(self, pred, gt_mask, class_num):
+    def update(self,
+               pred: np.ndarray,
+               target: np.ndarray,
+               class_list: List[int]):
+        """Update the meter's state by a batch of result.
+
+        :param pred: dtype=int64, shape=(n, h, w)
+        :param target: dtype=int64, shape=(n, h, w)
+        :param class_list: list of classes
         """
-        Args:
-            pred(numpy):(n,h,w)
-            gt_mask(numpy):(n,h,w)
-            class_num(list):(n)
-        """
-        for i in range(pred.shape[0]):
+        assert len(pred) == len(target) == len(class_list)
+        for pred_i, target_i, class_i in zip(pred, target, class_list):
+            pred_i[np.where(target_i == self._ignore_class)] = self._ignore_class
 
-            pred[i][np.where(gt_mask[i] == 255)] = 255
-
-            intersection = ((pred[i] == 1) & (gt_mask[i] == 1)).sum((0, 1))
-            union = ((pred[i] == 1) | (gt_mask[i] == 1)).sum((0, 1))
-
+            intersection = ((pred_i == 1) & (target_i == 1)).sum()
+            union = ((pred_i == 1) | (target_i == 1)).sum()
             iou = float(intersection) / float(union)
 
             self._fb_iou.append(iou)
-            if class_num[i] in self._miou_dict:
-                self._miou_dict[class_num].append(iou)
-            else:
-                self._miou_dict[class_num] = [iou]
+            self._m_iou_dict[class_i].append(iou)
 
-    def miou(self):
-        miou_list = []
-        for key, value in self._miou_dict.items():
-            miou_list.append(np.mean(value))
-        return np.mean(miou_list)
+    def m_iou(self):
+        m_iou_list = []
+        for iou_list in self._m_iou_dict.values():
+            m_iou_list.append(np.mean(iou_list))
+        return np.mean(m_iou_list)
 
     def fb_iou(self):
-
         return np.mean(self._fb_iou)
