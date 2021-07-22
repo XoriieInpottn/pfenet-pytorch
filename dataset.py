@@ -20,6 +20,7 @@ from tqdm import tqdm
 
 MEAN = np.array([0.485, 0.456, 0.406], np.float32)
 STD = np.array([0.229, 0.224, 0.225], np.float32)
+IGNORE_CLASS = 255
 
 
 def encode_image(image: np.ndarray) -> np.ndarray:
@@ -67,9 +68,6 @@ class AugmenterWrapper(object):
         return image, mask
 
 
-IGNORE_CLASS = 255
-
-
 class SegmentationDataset(Dataset):
     """Dataset for k-shot image segmentation.
     """
@@ -78,21 +76,23 @@ class SegmentationDataset(Dataset):
                  path,
                  sub_class_list,
                  num_shots,
-                 image_size,
+                 image_size: int,
                  is_train=False,
                  parse_class=False):
         self._num_shots = num_shots
-        if not isinstance(image_size, (tuple, list)):
-            image_size = (image_size, image_size)
         self._transform = AugmenterWrapper([
-            iaa.Resize({'longer-side': (473, 500), 'shorter-side': 'keep-aspect-ratio'}, 'linear'),
+            iaa.Resize(
+                {'longer-side': (image_size, int(image_size * 1.1)),
+                 'shorter-side': 'keep-aspect-ratio'},
+                'linear'
+            ),
             iaa.Fliplr(0.5),
             iaa.Rotate((-10, 10), cval=127),
             iaa.GaussianBlur((0.0, 0.1)),
             iaa.PadToAspectRatio(1.0, pad_cval=127, position='center-center'),
-            iaa.CropToFixedSize(473, 473)
+            iaa.CropToFixedSize(image_size, image_size)
         ]) if is_train else AugmenterWrapper([
-            iaa.Resize({'longer-side': 473, 'shorter-side': 'keep-aspect-ratio'}, 'linear'),
+            iaa.Resize({'longer-side': image_size, 'shorter-side': 'keep-aspect-ratio'}, 'linear'),
             iaa.PadToAspectRatio(1.0, pad_cval=127, position='center-center')
         ])
 
@@ -197,7 +197,7 @@ def test():
         'data/name.json',
         [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
         num_shots=5,
-        image_size=(473, 473),
+        image_size=473,
         is_train=True
     )
     # for supp_doc, query_doc in tqdm(ds):

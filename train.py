@@ -17,7 +17,7 @@ from tqdm import tqdm
 import dataset
 import pfenet
 import utils
-from evaluate import ClassIouMeter
+from evaluate import IouMeter
 
 
 class Trainer(object):
@@ -131,7 +131,7 @@ class Trainer(object):
             )
 
     def _evaluate(self):
-        meter = ClassIouMeter(dataset.IGNORE_CLASS)
+        meter = IouMeter(dataset.IGNORE_CLASS)
         loop = tqdm(self._test_loader, dynamic_ncols=True, leave=False)
         for supp_doc, query_doc in loop:
             output = self._predict_step(

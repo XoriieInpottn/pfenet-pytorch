@@ -11,12 +11,18 @@ from typing import List
 import numpy as np
 
 
-class ClassIouMeter(object):
+class IouMeter(object):
 
-    def __init__(self, ignore_class: int):
+    def __init__(self, ignore_class: int, eps=1e-10):
         self._ignore_class = ignore_class
-        self._m_iou_dict = collections.defaultdict(list)
-        self._fb_iou = []
+        self._eps = eps
+
+        self._inter_fg = 0
+        self._union_fg = 0
+        self._inter_bg = 0
+        self._union_bg = 0
+        self._class_inter = collections.defaultdict(int)
+        self._class_union = collections.defaultdict(int)
 
     def update(self,
                pred: np.ndarray,
@@ -32,18 +38,27 @@ class ClassIouMeter(object):
         for pred_i, target_i, class_i in zip(pred, target, class_list):
             pred_i[np.where(target_i == self._ignore_class)] = self._ignore_class
 
-            intersection = ((pred_i == 1) & (target_i == 1)).sum()
+            inter = ((pred_i == 1) & (target_i == 1)).sum()
             union = ((pred_i == 1) | (target_i == 1)).sum()
-            iou = float(intersection) / float(union)
+            self._class_inter[class_i] += inter
+            self._class_union[class_i] += union
+            self._inter_fg += inter
+            self._union_fg += union
 
-            self._fb_iou.append(iou)
-            self._m_iou_dict[class_i].append(iou)
+            inter_bg = ((pred_i == 0) & (target_i == 0)).sum()
+            union_bg = ((pred_i == 0) | (target_i == 0)).sum()
+            self._inter_bg += inter_bg
+            self._union_bg += union_bg
 
     def m_iou(self):
-        m_iou_list = []
-        for iou_list in self._m_iou_dict.values():
-            m_iou_list.append(np.mean(iou_list))
-        return np.mean(m_iou_list)
+        iou_list = []
+        for clazz in self._class_inter:
+            inter = self._class_inter[clazz]
+            union = self._class_union[clazz]
+            iou_list.append(inter / (union + self._eps))
+        return np.mean(iou_list)
 
     def fb_iou(self):
-        return np.mean(self._fb_iou)
+        iou_fg = self._inter_fg / (self._union_fg + self._eps)
+        iou_bg = self._inter_bg / (self._union_bg + self._eps)
+        return (iou_fg + iou_bg) * 0.5
