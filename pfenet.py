@@ -25,11 +25,9 @@ class PFENet(nn.Module):
                  backbone_feat_size,
                  feat_size=256,
                  num_classes=2,
-                 ppm_scales=(60, 30, 15, 8),
-                 output_size=None):
+                 ppm_scales=(60, 30, 15, 8)):
         super(PFENet, self).__init__()
         self._ppm_scales = ppm_scales
-        self._output_size = output_size
 
         def _no_update(layer: nn.Module) -> nn.Module:
             layer.eval()
@@ -158,20 +156,16 @@ class PFENet(nn.Module):
         supp_feat = supp_feat.view((sx.size(0), -1, *supp_feat.size()[1:]))  # (n, k, d, 1, 1)
         supp_feat = supp_feat.mean(1)  # (n, d, 1, 1)
 
-        prior = self._make_prior(supp_feat_4, query_feat_4, (query_feat.size(2), query_feat.size(3)))
-        feat, aux_out = self._pyramid(supp_feat, query_feat, prior)
+        feat_size = (query_feat.size(2), query_feat.size(3))
+        prior = self._make_prior(supp_feat_4, query_feat_4)
+        pyramid_feat_list, aux_list = self._pyramid(supp_feat, query_feat, prior)
+        feat = torch.cat([resize(pyramid_feat, feat_size) for pyramid_feat in pyramid_feat_list], 1)
 
         feat = self.res1(feat)
         feat = self.res2(feat) + feat
-        out = self.cls(feat)
+        output = self.cls(feat)
 
-        if self._output_size is not None:
-            out = resize(out, self._output_size)
-
-        if self.training:
-            return out, aux_out
-        else:
-            return out
+        return output, aux_list
 
     @staticmethod
     def _weighted_gap(supp_feat, mask, eps=1e-4):
@@ -182,7 +176,7 @@ class PFENet(nn.Module):
         return supp_feat
 
     @staticmethod
-    def _make_prior(supp_feat, query_feat, out_size):
+    def _make_prior(supp_feat, query_feat):
         # supp_feat: (nk, c, h, w)
         # query_feat: (n, c, h, w)
         n, c, h, w = query_feat.shape
@@ -195,16 +189,15 @@ class PFENet(nn.Module):
         sim_max = sim.max(2, keepdim=True)[0]  # (n, k, 1)
         prior = (sim - sim_min) / (sim_max - sim_min + 1e-10)
         prior = prior.view((prior.size(0), prior.size(1), h, w))  # (n, k, h, w)
-        prior = resize(prior, out_size)
+        # prior = resize(prior, out_size)
         prior = prior.mean(1, keepdim=True)  # (n, 1, h, w)
         return prior
 
     def _pyramid(self, supp_feat, query_feat, prior):
-        # supp_feat: (nk, d, 1, 1)
-        # query_feat: (n, d, h3, w3)
-        query_feat_hw = (query_feat.size(2), query_feat.size(3))
+        # supp_feat: (n, d, 1, 1)
+        # query_feat: (n, d, h, w)
         pyramid_feat_list = []
-        out_list = []
+        aux_list = []
         for idx, tmp_bin in enumerate(self._ppm_scales):
             if isinstance(tmp_bin, (tuple, list)):
                 bin_h, bin_w = tmp_bin
@@ -214,11 +207,12 @@ class PFENet(nn.Module):
                 bin_h = (int(query_feat.size(2) * bin_h), int(query_feat.size(3) * bin_h))
             if bin_w < 1.0:
                 bin_w = (int(query_feat.size(2) * bin_w), int(query_feat.size(3) * bin_w))
+
             query_feat_bin = F.adaptive_avg_pool2d(query_feat, (bin_h, bin_w))  # (n, d, bin_h, bin_w)
             supp_feat_bin = supp_feat.expand(-1, -1, bin_h, bin_w)  # (n, d, bin_h, bin_w)
-            corr_mask_bin = resize(prior, (bin_h, bin_w))
-            merge_feat_bin = torch.cat([query_feat_bin, supp_feat_bin, corr_mask_bin], 1)
-            merge_feat_bin = self.init_merge[idx](merge_feat_bin)  # (n, d, bin_h, _bin_w)
+            prior_bin = resize(prior, (bin_h, bin_w))  # (n, d, bin_h, bin_w)
+            merge_feat_bin = torch.cat([query_feat_bin, supp_feat_bin, prior_bin], 1)  # (n, 3d, bin_h, bin_w)
+            merge_feat_bin = self.init_merge[idx](merge_feat_bin)  # (n, d, bin_h, bin_w)
 
             if idx > 0:
                 pre_feat_bin = pyramid_feat_list[idx - 1]  # .clone()
@@ -227,19 +221,13 @@ class PFENet(nn.Module):
                 merge_feat_bin = self.alpha_conv[idx - 1](rec_feat_bin) + merge_feat_bin  # (n, d, bin_h, bin_w)
 
             merge_feat_bin = self.beta_conv[idx](merge_feat_bin) + merge_feat_bin  # (n, d, bin_h, bin_w)
-            if self.training:
-                inner_out_bin = self.inner_cls[idx](merge_feat_bin)  # (n, num_class, bin_h, bin_w)
-                inner_out_bin = resize(inner_out_bin, self._output_size)  # (n, num_class, output_h, output_w)
-                out_list.append(inner_out_bin)
-
-            merge_feat_bin = resize(merge_feat_bin, query_feat_hw)  # (n, d, h3, w3)
             pyramid_feat_list.append(merge_feat_bin)
 
-        pyramid_feat = torch.cat(pyramid_feat_list, 1)
-        if self.training:
-            aux_out = torch.stack(out_list)  # (?, n, num_class, output_h, output_w)
-            return pyramid_feat, aux_out
-        return pyramid_feat, None
+            if self.training:
+                inner_out_bin = self.inner_cls[idx](merge_feat_bin)  # (n, num_class, bin_h, bin_w)
+                aux_list.append(inner_out_bin)
+
+        return pyramid_feat_list, aux_list
 
 
 class Loss(nn.Module):
@@ -248,26 +236,32 @@ class Loss(nn.Module):
         super(Loss, self).__init__()
         self._eps = eps
 
-    def forward(self, pred, target, pred_aux=None):
+    def forward(self, output, target, aux_list=None):
         """Cross-entropy loss.
 
-        :param pred: dtype=float32, shape=(n, c, h, w)
+        :param output: dtype=float32, shape=(n, c, ?, ?)
         :param target: dtype=int64, shape=(n, h, w)
-        :param pred_aux: dtype=float32, shape=(?, n, c, h, w)
+        :param aux_list: list of dtype=float32, shape=(n, c, ?, ?)
         :return: loss
         """
-        target = F.one_hot(target, pred.size(1)).float()  # (n, h, w, c)
+        size = (target.size(1), target.size(2))
+
+        target = F.one_hot(target, output.size(1)).float()  # (n, h, w, c)
         target = target.permute((0, 3, 1, 2))  # (n, c, h, w)
-        out = F.softmax(pred, 1)
-        loss = -target * torch.log(out + self._eps) - (1.0 - target) * torch.log(1.0 - out + self._eps)
+        output = resize(output, size)
+        output = F.softmax(output, 1)
+        loss = -target * torch.log(output + self._eps) - (1.0 - target) * torch.log(1.0 - output + self._eps)
         loss = loss.sum(1).mean()
 
-        target = target.unsqueeze(0)  # (1, n, c, h, w)
-        pred_aux = F.softmax(pred_aux, 2)
-        loss_aux = -target * torch.log(pred_aux + self._eps) - (1.0 - target) * torch.log(1.0 - pred_aux + self._eps)
-        loss_aux = loss_aux.sum(2).mean(0).mean()
+        if aux_list:
+            target = target.unsqueeze(0)  # (1, n, c, h, w)
+            aux = torch.stack([resize(aux, size) for aux in aux_list])  # (?, n, c, h, w)
+            aux = F.softmax(aux, 2)
+            loss_aux = -target * torch.log(aux + self._eps) - (1.0 - target) * torch.log(1.0 - aux + self._eps)
+            loss_aux = loss_aux.sum(2).mean(0).mean()
+            loss = loss + loss_aux
 
-        return loss + loss_aux
+        return loss
 
 
 def get_vgg16_layers(pretrained=True):
@@ -344,7 +338,7 @@ def get_resnet50_layers(pretrained=True):
 
 
 def main():
-    model = PFENet(*get_vgg16_layers(), output_size=(473, 473))
+    model = PFENet(*get_vgg16_layers())
     loss_fn = Loss()
 
     sx = torch.normal(0.0, 1.0, (4, 5, 3, 473, 473), dtype=torch.float32)

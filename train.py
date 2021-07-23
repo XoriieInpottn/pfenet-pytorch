@@ -35,7 +35,7 @@ class Trainer(object):
 
         parser.add_argument('--num-shots', type=int, default=5)
         parser.add_argument('--image-size', type=int, default=473)
-        parser.add_argument('--output-dir', default='output')
+        parser.add_argument('--output-dir', default=None)
         self._args = parser.parse_args()
         os.environ['CUDA_VISIBLE_DEVICES'] = self._args.gpu
         self._device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -44,8 +44,9 @@ class Trainer(object):
         self._create_model()
         self._create_optimizer()
 
-        if not os.path.exists(self._args.output_dir):
-            os.mkdir(self._args.output_dir)
+        if self._args.output_dir is not None:
+            if not os.path.exists(self._args.output_dir):
+                os.mkdir(self._args.output_dir)
 
     def _create_dataset(self):
         train_dataset = dataset.SegmentationDataset(
@@ -81,10 +82,7 @@ class Trainer(object):
         )
 
     def _create_model(self):
-        self._model = pfenet.PFENet(
-            *pfenet.get_vgg16_layers(),
-            output_size=self._args.image_size
-        )
+        self._model = pfenet.PFENet(*pfenet.get_vgg16_layers())
         self._model = self._model.to(self._device)
 
         # "requires_grad" of of the backbone parameters are set to False
@@ -151,13 +149,14 @@ class Trainer(object):
             m_iou = meter.m_iou()
             loop.set_description(f'mIOU={m_iou:0.2%}')
 
-            for j, (image_i, label_i) in enumerate(zip(image, output)):
-                image_i = dataset.decode_image(image_i)
-                label_i = dataset.decode_label(label_i)
-                image_with_mask = evaluate.draw_mask(image_i, label_i)
-                image_with_mask = np.flip(image_with_mask, 2)  # RGB to BGR
-                output_path = os.path.join(self._args.output_dir, f'{i:04d}-{j:04d}.jpg')
-                cv2.imwrite(output_path, image_with_mask)
+            if self._args.output_dir is not None:
+                for j, (image_i, label_i) in enumerate(zip(image, output)):
+                    image_i = dataset.decode_image(image_i)
+                    label_i = dataset.decode_label(label_i)
+                    image_with_mask = evaluate.draw_mask(image_i, label_i)
+                    image_with_mask = np.flip(image_with_mask, 2)  # RGB to BGR
+                    output_path = os.path.join(self._args.output_dir, f'{i:04d}-{j:04d}.jpg')
+                    cv2.imwrite(output_path, image_with_mask)
 
         return meter.m_iou(), meter.fb_iou()
 
@@ -168,8 +167,8 @@ class Trainer(object):
         qy = qy.to(self._device)
         sy[torch.where(torch.eq(sy, dataset.IGNORE_CLASS))] = 0  # clear the "ignore" class
         qy[torch.where(torch.eq(qy, dataset.IGNORE_CLASS))] = 0  # clear the "ignore" class
-        pred, pred_aux = self._model(sx, sy, qx)
-        loss = self._loss(pred, qy, pred_aux)
+        output, aux_list = self._model(sx, sy, qx)
+        loss = self._loss(output, qy, aux_list)
         loss.backward()
         self._optimizer.step()
         self._optimizer.zero_grad()
@@ -181,8 +180,9 @@ class Trainer(object):
         sy = sy.to(self._device)
         qx = qx.to(self._device)
         sy[torch.where(torch.eq(sy, dataset.IGNORE_CLASS))] = 0  # clear the "ignore" class
-        pred = self._model(sx, sy, qx)
-        qy_ = torch.argmax(pred, 1)
+        output, _ = self._model(sx, sy, qx)  # (n, num_classes, ?, ?)
+        output = pfenet.resize(output, (self._args.image_size, self._args.image_size))
+        qy_ = torch.argmax(output, 1)
         return qy_.detach().cpu()
 
 
