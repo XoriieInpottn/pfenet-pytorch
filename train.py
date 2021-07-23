@@ -45,7 +45,7 @@ class Trainer(object):
         self._create_optimizer()
 
         if not os.path.exists(self._args.output_dir):
-            os.mkdir(self._args.output_path)
+            os.mkdir(self._args.output_dir)
 
     def _create_dataset(self):
         train_dataset = dataset.SegmentationDataset(
