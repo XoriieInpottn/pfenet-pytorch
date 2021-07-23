@@ -221,7 +221,7 @@ class PFENet(nn.Module):
             merge_feat_bin = self.init_merge[idx](merge_feat_bin)  # (n, d, bin_h, _bin_w)
 
             if idx > 0:
-                pre_feat_bin = pyramid_feat_list[idx - 1].clone()
+                pre_feat_bin = pyramid_feat_list[idx - 1]  # .clone()
                 pre_feat_bin = resize(pre_feat_bin, (bin_h, bin_w))
                 rec_feat_bin = torch.cat([merge_feat_bin, pre_feat_bin], 1)
                 merge_feat_bin = self.alpha_conv[idx - 1](rec_feat_bin) + merge_feat_bin  # (n, d, bin_h, bin_w)

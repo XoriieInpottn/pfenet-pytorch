@@ -125,7 +125,6 @@ class SegmentationDataset(Dataset):
                     # which means the mask will be downsampled to 1/32 of the original size and the valid area should be
                     # larger than 2, therefore the area in original size should be accordingly larger than 2 * 32 * 32
                     if tmp_label.sum() >= 2 * 32 * 32:
-                        # label_class.append(c)
                         self._doc_list.append((doc, c))
                         self._sub_class_dict[c].append(doc)
             else:
@@ -141,7 +140,7 @@ class SegmentationDataset(Dataset):
     def __getitem__(self, i):
         doc, class_chosen = self._doc_list[i]
         image = cv.imread(doc['image'], cv.IMREAD_COLOR)
-        image = cv.cvtColor(image, cv.COLOR_BGR2RGB)
+        image = np.flip(image, 2)  # BGR to RGB
         raw_label = np.load(doc['label'])
         label = self._make_label(raw_label, class_chosen)
         if callable(self._transform):
@@ -157,7 +156,7 @@ class SegmentationDataset(Dataset):
         docs_chosen = random.sample(self._sub_class_dict[class_chosen], self._num_shots)
         for doc in docs_chosen:
             image = cv.imread(doc['image'], cv.IMREAD_COLOR)
-            image = cv.cvtColor(image, cv.COLOR_BGR2RGB)
+            image = np.flip(image, 2)  # BGR to RGB
             raw_label = np.load(doc['label'])
             label = self._make_label(raw_label, class_chosen)
             if callable(self._transform):

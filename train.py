@@ -8,7 +8,7 @@
 import argparse
 import os
 
-import cv2 as cv
+import cv2
 import numpy as np
 import torch
 from torch import optim
@@ -43,6 +43,9 @@ class Trainer(object):
         self._create_dataset()
         self._create_model()
         self._create_optimizer()
+
+        if not os.path.exists(self._args.output_dir):
+            os.mkdir(self._args.output_path)
 
     def _create_dataset(self):
         train_dataset = dataset.SegmentationDataset(
@@ -152,8 +155,9 @@ class Trainer(object):
                 image_i = dataset.decode_image(image_i)
                 label_i = dataset.decode_label(label_i)
                 image_with_mask = evaluate.draw_mask(image_i, label_i)
-                image_with_mask = cv.cvtColor(image_with_mask, cv.COLOR_RGB2BGR)
-                cv.imwrite(os.path.join(self._args.output_dir, f'{i:04d}-{j:04d}.jpg'), image_with_mask)
+                image_with_mask = np.flip(image_with_mask, 2)  # RGB to BGR
+                output_path = os.path.join(self._args.output_dir, f'{i:04d}-{j:04d}.jpg')
+                cv2.imwrite(output_path, image_with_mask)
 
         return meter.m_iou(), meter.fb_iou()
 
