@@ -10,17 +10,18 @@ import os
 
 import numpy as np
 import torch
+from tensorboardX import SummaryWriter
 from torch import optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-import dataset_pentu
-import pfenet
-import utils
-from evaluate import ClassIouMeter
-from tensorboardX import SummaryWriter
+from . import dataset
+from . import pfenet
+from . import utils
+from .evaluate import IouMeter
 
-writer=SummaryWriter('run')
+writer = SummaryWriter('run')
+
 
 class Trainer(object):
 
@@ -45,12 +46,10 @@ class Trainer(object):
         self._create_model()
         self._create_optimizer()
 
-        
-
     def _create_dataset(self):
-        train_dataset = dataset_pentu.SegmentationDataset(
+        train_dataset = dataset.SegmentationDataset(
             self._args.data_path,
-            ['ele_up','ele_miss'],
+            ['ele_up', 'ele_miss'],
             num_shots=self._args.num_shots,
             image_size=self._args.image_size,
             is_train=True
@@ -67,7 +66,7 @@ class Trainer(object):
             pin_memory=True,
             worker_init_fn=worker_init_fn
         )
-        test_dataset = dataset_pentu.SegmentationDataset(
+        test_dataset = dataset.SegmentationDataset(
             '/edgeai/shared/PEN_TU_DATA/SMD/test',
             ['ele_up'],
             num_shots=self._args.num_shots,
@@ -81,10 +80,7 @@ class Trainer(object):
         )
 
     def _create_model(self):
-        self._model = pfenet.PFENet(
-            *pfenet.get_vgg16_layers(),
-            output_size=self._args.image_size
-        )
+        self._model = pfenet.PFENet(*pfenet.get_vgg16_layers())
         self._model = self._model.to(self._device)
 
         # "requires_grad" of of the backbone parameters are set to False
@@ -112,7 +108,7 @@ class Trainer(object):
     def train(self):
         loss_g = 0.0
         for epoch in range(self._args.num_epochs):
-            
+
             loop = tqdm(self._train_loader, dynamic_ncols=True, leave=False)
             self._model.train()
             for supp_doc, query_doc in loop:
@@ -125,8 +121,8 @@ class Trainer(object):
                 loss = float(loss.numpy())
                 loss_g = 0.9 * loss_g + 0.1 * loss
                 loop.set_description(f'[{epoch + 1}/{self._args.num_epochs}] L={loss_g:.06f} lr={lr:.01e}', False)
-                #转为255
-                writer.add_scalar('loss',loss_g, epoch)
+                # 转为255
+                writer.add_scalar('loss', loss_g, epoch)
             self._model.eval()
             m_iou, fb_iou = self._evaluate()
             writer.add_scalar('miou', m_iou, epoch)
@@ -138,7 +134,7 @@ class Trainer(object):
             )
 
     def _evaluate(self):
-        meter = ClassIouMeter(dataset_pentu.IGNORE_CLASS)
+        meter = IouMeter(dataset.IGNORE_CLASS)
         loop = tqdm(self._test_loader, dynamic_ncols=True, leave=False)
         for supp_doc, query_doc in loop:
             output = self._predict_step(
@@ -154,10 +150,10 @@ class Trainer(object):
 
             meter.update(output, target, class_list)
             m_iou = meter.m_iou()
-            writer.add_image('query label', target[0]*255, dataformats='HW')
-            writer.add_image('pred', output[0]*255, dataformats='HW')
+            writer.add_image('query label', target[0] * 255, dataformats='HW')
+            writer.add_image('pred', output[0] * 255, dataformats='HW')
             writer.add_image('query image', query_doc['image'][0])
-           
+
             loop.set_description(f'mIOU={m_iou:0.2%}')
         return meter.m_iou(), meter.fb_iou()
 
@@ -168,21 +164,22 @@ class Trainer(object):
         qy = qy.to(self._device)
         # sy[torch.where(torch.eq(sy, dataset.IGNORE_CLASS))] = 0  # clear the "ignore" class
         # qy[torch.where(torch.eq(qy, dataset.IGNORE_CLASS))] = 0  # clear the "ignore" class
-        pred, pred_aux = self._model(sx, sy, qx)
-        loss = self._loss(pred, qy, pred_aux)
+        output, aux_list = self._model(sx, sy, qx)
+        loss = self._loss(output, qy, aux_list)
         loss.backward()
         self._optimizer.step()
         self._optimizer.zero_grad()
         self._scheduler.step()
-        return loss.detach().cpu(), self._scheduler.get_last_lr()[0], pred
+        return loss.detach().cpu(), self._scheduler.get_last_lr()[0], output
 
     def _predict_step(self, sx, sy, qx):
         sx = sx.to(self._device)
         sy = sy.to(self._device)
         qx = qx.to(self._device)
-        #sy[torch.where(torch.eq(sy, dataset.IGNORE_CLASS))] = 0  # clear the "ignore" class
-        pred = self._model(sx, sy, qx)
-        qy_ = torch.argmax(pred, 1)
+        # sy[torch.where(torch.eq(sy, dataset.IGNORE_CLASS))] = 0  # clear the "ignore" class
+        output, _ = self._model(sx, sy, qx)  # (n, num_classes, ?, ?)
+        output = pfenet.resize(output, (self._args.image_size, self._args.image_size))
+        qy_ = torch.argmax(output, 1)
         return qy_.detach().cpu()
 
 
