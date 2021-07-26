@@ -169,11 +169,10 @@ class PFENet(nn.Module):
 
     @staticmethod
     def _weighted_gap(supp_feat, mask, eps=1e-4):
-        supp_feat = supp_feat * mask
-        feat_h, feat_w = supp_feat.shape[-2:][0], supp_feat.shape[-2:][1]
-        area = F.avg_pool2d(mask, (supp_feat.size()[2], supp_feat.size()[3])) * feat_h * feat_w
-        supp_feat = F.avg_pool2d(supp_feat, supp_feat.shape[-2:]) * feat_h * feat_w / (area + eps)
-        return supp_feat
+        # supp_feat: (n, d, h, w)
+        # mask: (n, 1, h, w)
+        weight = mask.mean((2, 3), keepdims=True) + eps
+        return (supp_feat * mask).mean((2, 3), keepdims=True) / weight
 
     @staticmethod
     def _make_prior(supp_feat, query_feat):
@@ -210,8 +209,8 @@ class PFENet(nn.Module):
 
             query_feat_bin = F.adaptive_avg_pool2d(query_feat, (bin_h, bin_w))  # (n, d, bin_h, bin_w)
             supp_feat_bin = supp_feat.expand(-1, -1, bin_h, bin_w)  # (n, d, bin_h, bin_w)
-            prior_bin = resize(prior, (bin_h, bin_w))  # (n, d, bin_h, bin_w)
-            merge_feat_bin = torch.cat([query_feat_bin, supp_feat_bin, prior_bin], 1)  # (n, 3d, bin_h, bin_w)
+            prior_bin = resize(prior, (bin_h, bin_w))  # (n, 1, bin_h, bin_w)
+            merge_feat_bin = torch.cat([query_feat_bin, supp_feat_bin, prior_bin], 1)  # (n, 2d + 1, bin_h, bin_w)
             merge_feat_bin = self.init_merge[idx](merge_feat_bin)  # (n, d, bin_h, bin_w)
 
             if idx > 0:

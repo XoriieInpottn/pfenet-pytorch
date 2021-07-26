@@ -35,6 +35,7 @@ class Trainer(object):
 
         parser.add_argument('--num-shots', type=int, default=5)
         parser.add_argument('--image-size', type=int, default=473)
+        parser.add_argument('--split', type=int, choices=[0, 1, 2, 3], default=0)
         parser.add_argument('--output-dir', default=None)
         self._args = parser.parse_args()
         os.environ['CUDA_VISIBLE_DEVICES'] = self._args.gpu
@@ -49,9 +50,18 @@ class Trainer(object):
                 os.mkdir(self._args.output_dir)
 
     def _create_dataset(self):
+        split = [
+            [1, 2, 3, 4, 5],
+            [6, 7, 8, 9, 10],
+            [11, 12, 13, 14, 15],
+            [16, 17, 18, 19, 20]
+        ]
+        test_classes = split[self._args.split]
+        train_classes = [i for i in range(1, 21) if i not in test_classes]
+
         train_dataset = dataset.SegmentationDataset(
             self._args.data_path,
-            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+            sub_class_list=train_classes,
             num_shots=self._args.num_shots,
             image_size=self._args.image_size,
             is_train=True
@@ -70,7 +80,7 @@ class Trainer(object):
         )
         test_dataset = dataset.SegmentationDataset(
             self._args.data_path,
-            [16, 17, 18, 19, 20],
+            sub_class_list=test_classes,
             num_shots=self._args.num_shots,
             image_size=self._args.image_size,
         )
