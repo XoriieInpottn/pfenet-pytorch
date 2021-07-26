@@ -10,17 +10,19 @@ import os
 
 import numpy as np
 import torch
-from tensorboardX import SummaryWriter
+# from tensorboardX import SummaryWriter
 from torch import optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from torch.nn import functional as F
 
 from . import dataset
 from . import pfenet
 from . import utils
 from .evaluate import IouMeter
 
-writer = SummaryWriter('run')
+
+# writer = SummaryWriter('run')
 
 
 class Trainer(object):
@@ -28,7 +30,6 @@ class Trainer(object):
     def __init__(self):
         parser = argparse.ArgumentParser()
         parser.add_argument('--gpu', type=str, default='0', help='Which GPU to use.')
-        parser.add_argument('--data-path', required=True, help='Path of the directory that contains the data files.')
         parser.add_argument('--batch-size', type=int, default=8, help='Batch size.')
         parser.add_argument('--num-epochs', type=int, default=100, help='The number of epochs to train.')
         parser.add_argument('--max-lr', type=float, default=1e-3, help='The maximum value of learning rate.')
@@ -48,7 +49,7 @@ class Trainer(object):
 
     def _create_dataset(self):
         train_dataset = dataset.SegmentationDataset(
-            self._args.data_path,
+            '/edgeai/shared/PEN_TU_DATA/SMD/train',
             ['ele_up', 'ele_miss'],
             num_shots=self._args.num_shots,
             image_size=self._args.image_size,
@@ -122,10 +123,10 @@ class Trainer(object):
                 loss_g = 0.9 * loss_g + 0.1 * loss
                 loop.set_description(f'[{epoch + 1}/{self._args.num_epochs}] L={loss_g:.06f} lr={lr:.01e}', False)
                 # 转为255
-                writer.add_scalar('loss', loss_g, epoch)
+                # writer.add_scalar('loss', loss_g, epoch)
             self._model.eval()
             m_iou, fb_iou = self._evaluate()
-            writer.add_scalar('miou', m_iou, epoch)
+            # writer.add_scalar('miou', m_iou, epoch)
             loop.write(
                 f'[{epoch + 1}/{self._args.num_epochs}] '
                 f'L={loss_g:.06f} '
@@ -150,9 +151,9 @@ class Trainer(object):
 
             meter.update(output, target, class_list)
             m_iou = meter.m_iou()
-            writer.add_image('query label', target[0] * 255, dataformats='HW')
-            writer.add_image('pred', output[0] * 255, dataformats='HW')
-            writer.add_image('query image', query_doc['image'][0])
+            # writer.add_image('query label', target[0] * 255, dataformats='HW')
+            # writer.add_image('pred', output[0] * 255, dataformats='HW')
+            # writer.add_image('query image', query_doc['image'][0])
 
             loop.set_description(f'mIOU={m_iou:0.2%}')
         return meter.m_iou(), meter.fb_iou()

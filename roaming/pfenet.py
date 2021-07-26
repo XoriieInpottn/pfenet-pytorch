@@ -240,7 +240,7 @@ class Loss(nn.Module):
         self._eps = eps
 
     def forward(self, output, target, aux_list=None):
-        """Cross-entropy loss.
+        """Focal loss.
 
         :param output: dtype=float32, shape=(n, c, ?, ?)
         :param target: dtype=int64, shape=(n, h, w)
@@ -253,15 +253,18 @@ class Loss(nn.Module):
         target = target.permute((0, 3, 1, 2))  # (n, c, h, w)
         output = resize(output, size)
         output = F.softmax(output, 1)
-        loss = -target * torch.log(output + self._eps) - (1.0 - target) * torch.log(1.0 - output + self._eps)
-        loss = loss.sum(1).mean()
+        p = (target * output).sum(1)
+        loss = -torch.pow(1.0 - p, 3) * torch.log(p + self._eps)
+        loss = loss.sum((1, 2)).mean()
 
         if aux_list:
             target = target.unsqueeze(0)  # (1, n, c, h, w)
             aux = torch.stack([resize(aux, size) for aux in aux_list])  # (?, n, c, h, w)
             aux = F.softmax(aux, 2)
-            loss_aux = -target * torch.log(aux + self._eps) - (1.0 - target) * torch.log(1.0 - aux + self._eps)
-            loss_aux = loss_aux.sum(2).mean(0).mean()
+
+            p = (target * aux).sum(2)
+            loss_aux = -torch.pow(1.0 - p, 3) * torch.log(p + self._eps)
+            loss_aux = loss_aux.sum((2, 3)).mean()
             loss = loss + loss_aux
 
         return loss

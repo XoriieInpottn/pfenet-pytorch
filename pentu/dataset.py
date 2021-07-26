@@ -6,10 +6,10 @@
 """
 
 import collections
-import json
 import os
 import random
 from typing import Iterable
+
 import cv2 as cv
 import numpy as np
 from imgaug import SegmentationMapsOnImage
@@ -17,8 +17,8 @@ from imgaug import augmenters as iaa
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
-MEAN = np.array([0.485, 0.456, 0.406], np.float32)
-STD = np.array([0.229, 0.224, 0.225], np.float32)
+MEAN = np.array([0.485, 0.456, 0.406], np.float32) * 255
+STD = np.array([0.229, 0.224, 0.225], np.float32) * 255
 
 
 def encode_image(image: np.ndarray) -> np.ndarray:
@@ -28,9 +28,10 @@ def encode_image(image: np.ndarray) -> np.ndarray:
     :return: np.ndarray, dtype=float32, shape=(c, h, w)
     """
     image = image.astype(np.float32)
-    image = (image / 255.0 - MEAN) / STD
+    image = (image - MEAN) / STD
     image = np.transpose(image, (2, 0, 1))
     return image
+
 
 def decode_image(tensor: np.ndarray) -> np.ndarray:
     """Convert float tensor back to an image.
@@ -39,17 +40,17 @@ def decode_image(tensor: np.ndarray) -> np.ndarray:
     :return: np.ndarray, dtype=uint8, shape=(h, w, c)
     """
     tensor = np.transpose(tensor, (1, 2, 0))
-    tensor = (tensor * STD + MEAN) * 255.0
+    tensor = tensor * STD + MEAN
     tensor = np.clip(tensor, 0, 255)
     return tensor.astype(np.uint8)
 
 
 def encode_label(label: np.ndarray) -> np.ndarray:
-    return label.astype(np.int64)
+    return (label / 255).astype(np.int64)
 
 
 def decode_label(tensor: np.ndarray) -> np.ndarray:
-    return tensor.astype(np.uint8)
+    return (tensor * 255).astype(np.uint8)
 
 
 class AugmenterWrapper(object):
@@ -85,7 +86,7 @@ class SegmentationDataset(Dataset):
             image_size = (image_size, image_size)
         self._transform = AugmenterWrapper([
             iaa.Resize({'longer-side': (473, 500),
-                       'shorter-side': 'keep-aspect-ratio'}, 'linear'),
+                        'shorter-side': 'keep-aspect-ratio'}, 'linear'),
             iaa.Fliplr(0.5),
             iaa.Rotate((-10, 10), cval=127),
             iaa.GaussianBlur((0.0, 0.1)),
@@ -108,7 +109,7 @@ class SegmentationDataset(Dataset):
             label_list = os.listdir(label_path)
             image_list.sort()
             label_list.sort()
-            assert(len(image_list) == len(label_list))
+            assert (len(image_list) == len(label_list))
             for j in range(len(image_list)):
                 single_image_path = os.path.join(image_path, image_list[j])
                 single_mask_path = os.path.join(label_path, label_list[j])
@@ -130,10 +131,7 @@ class SegmentationDataset(Dataset):
         doc, class_chosen = self._doc_list[i]
         image = cv.imread(doc['image'], cv.IMREAD_COLOR)
         image = cv.cvtColor(image, cv.COLOR_BGR2RGB)
-        raw_label = cv.imread(doc['label'], cv.IMREAD_GRAYSCALE)
-        label = np.uint8(raw_label)
-        label = label/255
-        # remove data augument
+        label = cv.imread(doc['label'], cv.IMREAD_GRAYSCALE)
         if callable(self._transform):
             image, label = self._transform(image, label)
         query_doc = {
@@ -149,9 +147,7 @@ class SegmentationDataset(Dataset):
         for doc in docs_chosen:
             image = cv.imread(doc['image'], cv.IMREAD_COLOR)
             image = cv.cvtColor(image, cv.COLOR_BGR2RGB)
-            raw_label = cv.imread(doc['label'], cv.IMREAD_GRAYSCALE)
-            label = np.uint8(raw_label)
-            label = label/255
+            label = cv.imread(doc['label'], cv.IMREAD_GRAYSCALE)
 
             if callable(self._transform):
                 image, label = self._transform(image, label)
@@ -163,18 +159,6 @@ class SegmentationDataset(Dataset):
         }
         return supp_doc, query_doc
 
-    @staticmethod
-    def _make_label(raw_label, class_chosen):
-        label = np.zeros_like(raw_label)
-
-        target_pix = np.where(raw_label == 255)
-        ignore_pix = np.where(raw_label == IGNORE_CLASS)
-        label[:, :] = 0
-        if target_pix[0].shape[0] > 0:
-            label[target_pix[0], target_pix[1]] = 1
-        label[ignore_pix[0], ignore_pix[1]] = IGNORE_CLASS
-        return label
-
 
 def test():
     ds = SegmentationDataset(
@@ -184,8 +168,16 @@ def test():
         image_size=(473, 473),
         is_train=True
     )
+    supp_doc, query_doc = ds[10]
+    image = supp_doc['image'][2]
+    label = supp_doc['label'][2]
+    image = decode_image(image)
+    label = decode_label(label)
+    cv.imwrite('image.jpg', image)
+    cv.imwrite('label.png', label)
+    print(image.mean(), label.mean())
+    exit()
 
-    print(ds.__len__())
     from torch.utils.data import DataLoader
     loader = DataLoader(
         ds,
@@ -197,7 +189,6 @@ def test():
     print(len(loader))
     loop = tqdm(loader, dynamic_ncols=True, leave=False)
     for supp_doc, query_doc in loop:
-
         label = query_doc['label']
         uniou = (label[3] == 1).sum()
         print(uniou)
