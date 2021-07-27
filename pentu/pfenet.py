@@ -339,6 +339,40 @@ def get_resnet50_layers(pretrained=True):
     return layer0, layer1, layer2, layer3, layer4, 1024 + 512
 
 
+def get_mobilenet_v2_layers(pretrained=True):
+    import torchvision.models as models
+    import torch
+    net = models.mobilenet_v2(pretrained=pretrained)
+    # net.load_state_dict(torch.load("./base_models_dict/mobilenet_v2-b0353104.pth"))
+    # net.load_state_dict(torch.load("./model_mobilenet_v2_MNIST_Images_freeze1_epoch1000_curEpoch325"))
+
+    layer0_idx = range(0, 1)
+    layer1_idx = range(1, 3)
+    layer2_idx = range(3, 5)
+    layer3_idx = range(5, 8)
+    layer4_idx = range(8, 19)
+    layers_0 = []
+    layers_1 = []
+    layers_2 = []
+    layers_3 = []
+    layers_4 = []
+    for idx in layer0_idx:
+        layers_0 += [net.features[idx]]
+    for idx in layer1_idx:
+        layers_1 += [net.features[idx]]
+    for idx in layer2_idx:
+        layers_2 += [net.features[idx]]
+    for idx in layer3_idx:
+        layers_3 += [net.features[idx]]
+    for idx in layer4_idx:
+        layers_4 += [net.features[idx]]
+    layer0 = nn.Sequential(*layers_0) # 224 -> 112, channel = 32
+    layer1 = nn.Sequential(*layers_1) # 112 -> 56, channel = 24
+    layer2 = nn.Sequential(*layers_2) # 56 -> 28, channel = 32
+    layer3 = nn.Sequential(*layers_3) # 28 -> 14, channel = 64
+    layer4 = nn.Sequential(*layers_4) # 14 -> 7, channel = 1280
+    return layer0, layer1, layer2, layer3, layer4, 32 + 64
+
 def main():
     model = PFENet(*get_vgg16_layers())
     loss_fn = Loss()
