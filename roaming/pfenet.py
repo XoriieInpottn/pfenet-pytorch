@@ -154,17 +154,23 @@ class PFENet(nn.Module):
                 supp_feat_2 = resize(supp_feat_2, (supp_feat_3.size(2), supp_feat_3.size(3)))
         supp_feat = torch.cat([supp_feat_3, supp_feat_2], 1)
         supp_feat = self.down_supp(supp_feat)
+
+        # compute prior
+        prior = self._make_prior(supp_feat_4, query_feat_4)  # (n, 1, ?, ?)
+
+        # compute prototypes
         supp_feat_fg = self._weighted_gap(supp_feat, supp_feat_3_mask)  # (nk, d, 1, 1)
         supp_feat_bg = self._weighted_gap(supp_feat, (1.0 - supp_feat_3_mask))  # (nk, d, 1, 1)
         supp_feat = torch.cat([supp_feat_fg, supp_feat_bg], 1)
         supp_feat = supp_feat.view((sx.size(0), -1, *supp_feat.size()[1:]))  # (n, k, d, 1, 1)
         supp_feat = supp_feat.mean(1)  # (n, d, 1, 1)
 
-        feat_size = (query_feat.size(2), query_feat.size(3))
-        prior = self._make_prior(supp_feat_4, query_feat_4)
+        # compute pyramid features
         pyramid_feat_list, aux_list = self._pyramid(supp_feat, query_feat, prior)
+        feat_size = (query_feat.size(2), query_feat.size(3))
         feat = torch.cat([resize(pyramid_feat, feat_size) for pyramid_feat in pyramid_feat_list], 1)
 
+        # compute output
         feat = self.res1(feat)
         feat = self.res2(feat) + feat
         output = self.cls(feat)
@@ -233,10 +239,44 @@ class PFENet(nn.Module):
         return pyramid_feat_list, aux_list
 
 
-class Loss(nn.Module):
+class CrossEntropyLoss(nn.Module):
 
     def __init__(self, eps=1e-10):
-        super(Loss, self).__init__()
+        super(CrossEntropyLoss, self).__init__()
+        self._eps = eps
+
+    def forward(self, output, target, aux_list=None):
+        """Cross-entropy loss.
+
+        :param output: dtype=float32, shape=(n, c, ?, ?)
+        :param target: dtype=int64, shape=(n, h, w)
+        :param aux_list: list of dtype=float32, shape=(n, c, ?, ?)
+        :return: loss
+        """
+        size = (target.size(1), target.size(2))
+
+        target = F.one_hot(target, output.size(1)).float()  # (n, h, w, c)
+        target = target.permute((0, 3, 1, 2))  # (n, c, h, w)
+        output = resize(output, size)
+        output = F.softmax(output, 1)
+        loss = -target * torch.log(output + self._eps) - (1.0 - target) * torch.log(1.0 - output + self._eps)
+        loss = loss.sum(1).mean()
+
+        if aux_list:
+            target = target.unsqueeze(0)  # (1, n, c, h, w)
+            aux = torch.stack([resize(aux, size) for aux in aux_list])  # (?, n, c, h, w)
+            aux = F.softmax(aux, 2)
+            loss_aux = -target * torch.log(aux + self._eps) - (1.0 - target) * torch.log(1.0 - aux + self._eps)
+            loss_aux = loss_aux.sum(2).mean(0).mean()
+            loss = loss + loss_aux
+
+        return loss
+
+
+class FocalLoss(nn.Module):
+
+    def __init__(self, eps=1e-10):
+        super(FocalLoss, self).__init__()
         self._eps = eps
 
     def forward(self, output, target, aux_list=None):
@@ -345,7 +385,7 @@ def get_resnet50_layers(pretrained=True):
 
 def main():
     model = PFENet(*get_vgg16_layers())
-    loss_fn = Loss()
+    loss_fn = FocalLoss()
 
     sx = torch.normal(0.0, 1.0, (4, 5, 3, 473, 473), dtype=torch.float32)
     sy = torch.randint(0, 1, (4, 5, 473, 473), dtype=torch.int64)

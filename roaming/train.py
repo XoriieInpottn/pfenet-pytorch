@@ -97,7 +97,7 @@ class Trainer(object):
 
         # "requires_grad" of of the backbone parameters are set to False
         self._parameters = [p for p in self._model.parameters() if p.requires_grad]
-        self._loss = pfenet.Loss()
+        self._loss = pfenet.FocalLoss()
 
     def _create_optimizer(self):
         if self._args.optimizer == 'MomentumSGD':
