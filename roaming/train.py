@@ -118,7 +118,7 @@ class Trainer(object):
         self._scheduler = utils.CosineWarmUpAnnealingLR(self._optimizer, num_loops)
 
     def train(self):
-        loss_g = 0.0
+        loss_g = None
         for epoch in range(self._args.num_epochs):
             self._model.train()
             loop = tqdm(self._train_loader, dynamic_ncols=True, leave=False)
@@ -130,7 +130,7 @@ class Trainer(object):
                     query_doc['label']
                 )
                 loss = float(loss.numpy())
-                loss_g = 0.9 * loss_g + 0.1 * loss
+                loss_g = 0.99 * loss_g + 0.01 * loss if loss_g is not None else loss
                 loop.set_description(f'[{epoch + 1}/{self._args.num_epochs}] L={loss_g:.06f} lr={lr:.01e}', False)
 
             self._model.eval()

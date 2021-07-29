@@ -9,6 +9,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from .attention import MLPAttention
+
 
 def resize(feat, size):
     return F.interpolate(feat, size=size, mode='bilinear', align_corners=True)
@@ -58,7 +60,7 @@ class PFENet(nn.Module):
         self.inner_cls = nn.ModuleList()
         for i in range(len(self._ppm_scales)):
             self.init_merge.append(nn.Sequential(
-                nn.Conv2d(feat_size * 3 + 1, feat_size, kernel_size=(1, 1), bias=False),
+                nn.Conv2d(feat_size * 4 + 1, feat_size, kernel_size=(1, 1), bias=False),
                 nn.ReLU(inplace=True),
                 nn.Conv2d(feat_size, feat_size, kernel_size=(1, 1), bias=False),
                 nn.ReLU(inplace=True)
@@ -99,6 +101,8 @@ class PFENet(nn.Module):
             nn.Dropout2d(p=0.1),
             nn.Conv2d(feat_size, num_classes, kernel_size=(1, 1))
         )
+        self.att_fg = MLPAttention(feat_size, feat_size, feat_size)
+        self.att_bg = MLPAttention(feat_size, feat_size, feat_size)
 
     def train(self, mode: bool = True):
         if not isinstance(mode, bool):
@@ -159,11 +163,17 @@ class PFENet(nn.Module):
         prior = self._make_prior(supp_feat_4, query_feat_4)  # (n, 1, ?, ?)
 
         # compute prototypes
-        supp_feat_fg = self._weighted_gap(supp_feat, supp_feat_3_mask)  # (nk, d, 1, 1)
-        supp_feat_bg = self._weighted_gap(supp_feat, (1.0 - supp_feat_3_mask))  # (nk, d, 1, 1)
-        supp_feat = torch.cat([supp_feat_fg, supp_feat_bg], 1)
-        supp_feat = supp_feat.view((sx.size(0), -1, *supp_feat.size()[1:]))  # (n, k, d, 1, 1)
-        supp_feat = supp_feat.mean(1)  # (n, d, 1, 1)
+        # supp_feat_fg = self._weighted_gap(supp_feat, supp_feat_3_mask)  # (nk, d, 1, 1)
+        # supp_feat_bg = self._weighted_gap(supp_feat, (1.0 - supp_feat_3_mask))  # (nk, d, 1, 1)
+        # supp_feat = torch.cat([supp_feat_fg, supp_feat_bg], 1)
+        # supp_feat = supp_feat.view((sx.size(0), -1, *supp_feat.size()[1:]))  # (n, k, d, 1, 1)
+        # supp_feat = supp_feat.mean(1)  # (n, d, 1, 1)
+
+        # supp_feat_fg = self._attention(self.att_fg, supp_feat, supp_feat_3_mask, query_feat)
+        # supp_feat_bg = self._attention(self.att_bg, supp_feat, (1.0 - supp_feat_3_mask), query_feat)
+        # supp_feat = torch.cat([supp_feat_fg, supp_feat_bg], 1)
+
+        supp_feat = self._get_prototypes(supp_feat, supp_feat_3_mask, query_feat)
 
         # compute pyramid features
         pyramid_feat_list, aux_list = self._pyramid(supp_feat, query_feat, prior)
@@ -176,6 +186,48 @@ class PFENet(nn.Module):
         output = self.cls(feat)
 
         return output, aux_list
+
+    @staticmethod
+    def _attention(att, supp_feat, mask, query_feat, eps=1e-5):
+        # supp_feat: (nk, d, ?, ?)
+        # mask: (nk, 1, ?, ?)
+        # query_feat: (n, d, ?, ?)
+        n, d, h, w = query_feat.shape
+        k = ((supp_feat * mask).sum((2, 3)) / (mask.sum((2, 3)) + eps)).view((n, -1, d))  # (n, k, d)
+        q = query_feat.view((n, d, -1)).permute((0, 2, 1))  # (n, ?, d)
+        return att(key=k, query=q)[0].mean(1).view((n, d, 1, 1))
+
+    @staticmethod
+    def _get_prototypes(supp_feat, mask, query_feat):
+        # supp_feat: (nk, d, h, w)
+        # mask: (nk, 1, h, w)
+        # query_feat: (n, d, h, w)
+        n, d, h, w = query_feat.shape
+        supp_feat_ = supp_feat * mask
+        supp_feat_ = supp_feat_.reshape((n, -1, d, h, w))  # (n, k, d, h, w)
+        supp_feat_ = supp_feat_.permute((0, 1, 3, 4, 2))  # (n, k, h, w, d)
+        supp_feat_ = supp_feat_.reshape((n, -1, d))  # (n, ?, d)
+        proto = PFENet._soft_kmeans(supp_feat_, 3)[0]  # (n, 3, d)
+        proto = proto.reshape((n, -1, 1, 1))  # (n, 3d, 1, 1)
+        return proto
+
+    @staticmethod
+    def _soft_kmeans(features, kernels, num_steps=5, scale=10.0):
+        # features: (n, f, d)
+        # kernels: (n, k, d)
+        assert num_steps > 0
+        if isinstance(kernels, int):
+            kernels = F.adaptive_avg_pool1d(features.detach().permute((0, 2, 1)), kernels).permute((0, 2, 1))
+        for _ in range(num_steps):
+            features_ = F.normalize(features, 2, 1)
+            kernels_ = F.normalize(kernels, 2, 1)
+            sim_mat = torch.einsum('nfd,nkd->nfk', features_, kernels_)  # (n, f, k)
+            sim_mat = F.softmax(sim_mat * scale, 2)
+            sim_mat_ = sim_mat.unsqueeze(3)  # (n, f, k, 1)
+            features_ = features.unsqueeze(2)  # (n, f, 1, d)
+            kernels = (sim_mat_ * features_).sum(1) / sim_mat_.sum(1)
+        # noinspection PyUnboundLocalVariable
+        return kernels, sim_mat
 
     @staticmethod
     def _weighted_gap(supp_feat, mask, eps=1e-4):
