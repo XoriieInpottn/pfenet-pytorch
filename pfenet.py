@@ -194,7 +194,6 @@ class PFENet(nn.Module):
         sim_max = sim.max(2, keepdim=True)[0]  # (n, k, 1)
         prior = (sim - sim_min) / (sim_max - sim_min + 1e-10)
         prior = prior.view((prior.size(0), prior.size(1), h, w))  # (n, k, h, w)
-        # prior = resize(prior, out_size)
         prior = prior.mean(1, keepdim=True)  # (n, 1, h, w)
         return prior
 
@@ -220,7 +219,7 @@ class PFENet(nn.Module):
             merge_feat_bin = self.init_merge[idx](merge_feat_bin)  # (n, d, bin_h, bin_w)
 
             if idx > 0:
-                pre_feat_bin = pyramid_feat_list[idx - 1]  # .clone()
+                pre_feat_bin = pyramid_feat_list[idx - 1]
                 pre_feat_bin = resize(pre_feat_bin, (bin_h, bin_w))
                 rec_feat_bin = torch.cat([merge_feat_bin, pre_feat_bin], 1)
                 merge_feat_bin = self.alpha_conv[idx - 1](rec_feat_bin) + merge_feat_bin  # (n, d, bin_h, bin_w)
@@ -379,7 +378,7 @@ def get_resnet50_layers(pretrained=True):
     return layer0, layer1, layer2, layer3, layer4, 1024 + 512
 
 
-def main():
+def test():
     model = PFENet(*get_vgg16_layers())
     loss_fn = CrossEntropyLoss()
 
@@ -396,4 +395,4 @@ def main():
 
 
 if __name__ == '__main__':
-    exit(main())
+    exit(test())
