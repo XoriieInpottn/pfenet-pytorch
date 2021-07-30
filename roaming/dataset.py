@@ -6,20 +6,19 @@
 """
 
 import collections
-import json
-import os
 import random
 from typing import Iterable
 
 import cv2 as cv
 import numpy as np
+from docset import DocSet
 from imgaug import SegmentationMapsOnImage
 from imgaug import augmenters as iaa
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
-MEAN = np.array([0.485, 0.456, 0.406], np.float32)
-STD = np.array([0.229, 0.224, 0.225], np.float32)
+MEAN = np.array([0.485, 0.456, 0.406], np.float32) * 255
+STD = np.array([0.229, 0.224, 0.225], np.float32) * 255
 IGNORE_CLASS = 255
 
 
@@ -30,7 +29,7 @@ def encode_image(image: np.ndarray) -> np.ndarray:
     :return: np.ndarray, dtype=float32, shape=(c, h, w)
     """
     image = image.astype(np.float32)
-    image = (image / 255.0 - MEAN) / STD
+    image = (image - MEAN) / STD
     image = np.transpose(image, (2, 0, 1))
     return image
 
@@ -42,7 +41,7 @@ def decode_image(tensor: np.ndarray) -> np.ndarray:
     :return: np.ndarray, dtype=uint8, shape=(h, w, c)
     """
     tensor = np.transpose(tensor, (1, 2, 0))
-    tensor = (tensor * STD + MEAN) * 255.0
+    tensor = tensor * STD + MEAN
     tensor = np.clip(tensor, 0, 255)
     return tensor.astype(np.uint8)
 
@@ -72,13 +71,24 @@ class SegmentationDataset(Dataset):
     """Dataset for k-shot image segmentation.
     """
 
+    DS_DICT = {}
+
+    @staticmethod
+    def load_ds(path):
+        if path not in SegmentationDataset.DS_DICT:
+            doc_list = []
+            SegmentationDataset.DS_DICT[path] = doc_list
+            with DocSet(path, 'r') as ds:
+                for doc in tqdm(ds, dynamic_ncols=True, leave=False, desc='Load data'):
+                    doc_list.append(doc)
+        return SegmentationDataset.DS_DICT[path]
+
     def __init__(self,
                  path,
                  sub_class_list,
                  num_shots,
                  image_size: int,
-                 is_train=False,
-                 parse_class=False):
+                 is_train=False):
         self._num_shots = num_shots
         self._transform = AugmenterWrapper([
             iaa.Resize(
@@ -96,52 +106,34 @@ class SegmentationDataset(Dataset):
             iaa.PadToAspectRatio(1.0, pad_cval=127, position='center-center')
         ])
 
-        self._dir_path = os.path.dirname(path)
-        docs = []
-        with open(path, 'r') as f:
-            for line in f:
-                doc = json.loads(line)
-                doc['image'] = os.path.join(self._dir_path, doc['image'])
-                doc['label'] = os.path.join(self._dir_path, doc['label'])
-                docs.append(doc)
+        # load all docs from the ds file
+        # once loaded, the docs will be cached in the class
+        all_docs = SegmentationDataset.load_ds(path)
 
         self._doc_list = []
         self._sub_class_dict = collections.defaultdict(list)
-        for doc in tqdm(docs, leave=False):
-            if parse_class:
-                label = np.load(doc['label'])
-                for c in np.unique(label):
-                    c = int(c)
-                    if c == 0 or c == 255:
-                        continue
-                    if c not in sub_class_list:
-                        continue
-                    tmp_label = np.zeros_like(label)
-                    target_pix = np.where(label == c)
-                    tmp_label[target_pix[0], target_pix[1]] = 1
-                    # Shaban uses these lines to remove small objects:
-                    # if util.change_coordinates(mask, 32.0, 0.0).sum() > 2:
-                    #    filtered_item.append(item)
-                    # which means the mask will be downsampled to 1/32 of the original size and the valid area should be
-                    # larger than 2, therefore the area in original size should be accordingly larger than 2 * 32 * 32
-                    if tmp_label.sum() >= 2 * 32 * 32:
-                        self._doc_list.append((doc, c))
-                        self._sub_class_dict[c].append(doc)
-            else:
-                for c in doc['class']:
-                    if c not in sub_class_list:
-                        continue
-                    self._doc_list.append((doc, c))
-                    self._sub_class_dict[c].append(doc)
+        for doc in all_docs:
+            for clazz in doc['class']:
+                c = clazz['index']
+                area = clazz['area']
+                # Shaban uses these lines to remove small objects:
+                # if util.change_coordinates(mask, 32.0, 0.0).sum() > 2:
+                #    filtered_item.append(item)
+                # which means the mask will be downsampled to 1/32 of the original size and the valid area should be
+                # larger than 2, therefore the area in original size should be accordingly larger than 2 * 32 * 32
+                if not (c in sub_class_list and area >= 2 * 32 * 32):
+                    continue
+                self._doc_list.append((doc, c))
+                self._sub_class_dict[c].append(doc)
 
     def __len__(self):
         return len(self._doc_list)
 
     def __getitem__(self, i):
         doc, class_chosen = self._doc_list[i]
-        image = cv.imread(doc['image'], cv.IMREAD_COLOR)
+        image = cv.imdecode(np.frombuffer(doc['image'], np.byte), cv.IMREAD_COLOR)
         image = np.flip(image, 2)  # BGR to RGB
-        raw_label = np.load(doc['label'])
+        raw_label = doc['label']
         label = self._make_label(raw_label, class_chosen)
         if callable(self._transform):
             image, label = self._transform(image, label)
@@ -155,9 +147,9 @@ class SegmentationDataset(Dataset):
         supp_label_list = []
         docs_chosen = random.sample(self._sub_class_dict[class_chosen], self._num_shots)
         for doc in docs_chosen:
-            image = cv.imread(doc['image'], cv.IMREAD_COLOR)
+            image = cv.imdecode(np.frombuffer(doc['image'], np.byte), cv.IMREAD_COLOR)
             image = np.flip(image, 2)  # BGR to RGB
-            raw_label = np.load(doc['label'])
+            raw_label = doc['label']
             label = self._make_label(raw_label, class_chosen)
             if callable(self._transform):
                 image, label = self._transform(image, label)
@@ -180,35 +172,3 @@ class SegmentationDataset(Dataset):
             label[target_pix[0], target_pix[1]] = 1
         label[ignore_pix[0], ignore_pix[1]] = IGNORE_CLASS
         return label
-
-
-def test():
-    ds = SegmentationDataset(
-        'data/name.json',
-        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
-        num_shots=5,
-        image_size=473,
-        is_train=True
-    )
-    # for supp_doc, query_doc in tqdm(ds):
-    #     pass
-    # exit()
-    from torch.utils.data import DataLoader
-    loader = DataLoader(
-        ds,
-        batch_size=8,
-        shuffle=True,
-        num_workers=40,
-        pin_memory=True
-    )
-    print(len(loader))
-    for supp_doc, query_doc in tqdm(loader):
-        pass
-        # print('image', query_doc['image'].shape)
-        # print('label', query_doc['label'].shape)
-        # print('class', query_doc['class'])
-    return 0
-
-
-if __name__ == '__main__':
-    raise SystemExit(test())
