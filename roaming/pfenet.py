@@ -45,9 +45,6 @@ class MLPKAttention(nn.Module):
             hidden = self.non_lin(self.norm(features_ + kernels_))  # (n, f, k, a)
             sim_mat = self.attention_layer(hidden)  # (n, f, k, 1)
             sim_mat = F.softmax(sim_mat * scale, 2)
-            # features_ = F.normalize(features, 2, 1)
-            # kernels_ = F.normalize(kernels, 2, 1)
-            # sim_mat = torch.einsum('nfd,nkd->nfk', features_, kernels)  # (n, f, k)
             features_ = features.unsqueeze(2)  # (n, f, 1, d)
             kernels = (sim_mat * features_).sum(1) / sim_mat.sum(1)
         # noinspection PyUnboundLocalVariable
@@ -58,7 +55,7 @@ class BiLinearKAttention(nn.Module):
 
     def __init__(self, feature_size):
         super(BiLinearKAttention, self).__init__()
-        self.dense = nn.Linear(feature_size, feature_size)
+        self.weight = nn.Parameter(torch.empty((feature_size, feature_size)))
 
     def forward(self, features, kernels, num_steps=5, scale=10.0):
         # features: (n, f, d)
@@ -80,6 +77,67 @@ class BiLinearKAttention(nn.Module):
             kernels = (sim_mat_ * features_).sum(1) / sim_mat_.sum(1)
         # noinspection PyUnboundLocalVariable
         return kernels, sim_mat
+
+
+class DotProductKAttention(nn.Module):
+
+    def __init__(self, feature_size):
+        super(DotProductKAttention, self).__init__()
+        self.res_query = nn.Sequential(
+            nn.Linear(feature_size, feature_size),
+            nn.ReLU(),
+            nn.Dropout(p=0.2),
+            nn.Linear(feature_size, feature_size),
+            nn.ReLU(),
+            nn.Dropout(p=0.2),
+            nn.Linear(feature_size, feature_size)
+        )
+        self.res_key = nn.Sequential(
+            nn.Linear(feature_size, feature_size),
+            nn.ReLU(),
+            nn.Dropout(p=0.2),
+            nn.Linear(feature_size, feature_size),
+            nn.ReLU(),
+            nn.Dropout(p=0.2),
+            nn.Linear(feature_size, feature_size)
+        )
+
+    def forward(self, query, key, mask, num_steps=1, scale=1.0):
+        # query: (n, q, d)
+        # key: (n, k, d)
+        # mask: (n, k, 1)
+        assert num_steps > 0
+
+        if isinstance(query, int):
+            query_len = query
+            key_no_grad = key.detach()
+            key_no_grad = key_no_grad.permute((0, 2, 1))  # (n, d, k)
+            query = F.adaptive_avg_pool1d(key_no_grad, query_len)  # (n, d, q)
+            query = query.permute((0, 2, 1))  # (n, q, d)
+
+        query = self.res_query(query) + query
+        key = self.res_key(key) + key
+        value = key.unsqueeze(1)  # (n, 1, k, d)
+        mask = mask.permute((0, 2, 1))  # (n, 1, k)
+
+        for _ in range(num_steps):
+            # features_ = F.normalize(features, 2, 1)
+            # kernels_ = F.normalize(kernels, 2, 1)
+            sim_mat = torch.einsum('nqd,nkd->nqk', query, key)  # (n, q, k)
+            sim_mat = self._softmax(sim_mat * scale, 2, mask=mask)
+
+            sim_mat_ = sim_mat.unsqueeze(3)  # (n, q, k, 1)
+            query = sim_mat_ * value  # (n, q, k, d)
+            query = query.sum(2)  # (n, q, d)
+
+        # noinspection PyUnboundLocalVariable
+        return query, sim_mat
+
+    @staticmethod
+    def _softmax(x: torch.Tensor, dim=None, mask: torch.Tensor = None) -> torch.Tensor:
+        if mask is not None:
+            x = x - 1e30 * (1.0 - mask.float())
+        return F.softmax(x, dim)
 
 
 class PFENet(nn.Module):
@@ -126,7 +184,7 @@ class PFENet(nn.Module):
         self.inner_cls = nn.ModuleList()
         for i in range(len(self._ppm_scales)):
             self.init_merge.append(nn.Sequential(
-                nn.Conv2d(feat_size * 4 + 1, feat_size, kernel_size=(1, 1), bias=False),
+                nn.Conv2d(feat_size * 7 + 1, feat_size, kernel_size=(1, 1), bias=False),
                 nn.ReLU(inplace=True),
                 nn.Conv2d(feat_size, feat_size, kernel_size=(1, 1), bias=False),
                 nn.ReLU(inplace=True)
@@ -167,7 +225,8 @@ class PFENet(nn.Module):
             nn.Dropout2d(p=0.1),
             nn.Conv2d(feat_size, num_classes, kernel_size=(1, 1))
         )
-        self.att = BiLinearKAttention(feat_size)
+        self.att = DotProductKAttention(feat_size)
+        self.att_bg = DotProductKAttention(feat_size)
 
     def train(self, mode: bool = True):
         if not isinstance(mode, bool):
@@ -223,6 +282,7 @@ class PFENet(nn.Module):
                 supp_feat_2 = resize(supp_feat_2, (supp_feat_3.size(2), supp_feat_3.size(3)))
         supp_feat = torch.cat([supp_feat_3, supp_feat_2], 1)
         supp_feat = self.down_supp(supp_feat)
+        supp_mask = supp_feat_3_mask
 
         # compute prior
         prior = self._make_prior(supp_feat_4, query_feat_4)  # (n, 1, ?, ?)
@@ -238,7 +298,9 @@ class PFENet(nn.Module):
         # supp_feat_bg = self._attention(self.att_bg, supp_feat, (1.0 - supp_feat_3_mask), query_feat)
         # supp_feat = torch.cat([supp_feat_fg, supp_feat_bg], 1)
 
-        supp_feat = self._get_prototypes(supp_feat, supp_feat_3_mask, query_feat)
+        supp_feat = supp_feat.reshape((query_feat.shape[0], -1, *query_feat.shape[1:]))  # (n, k, d, ?, ?)
+        supp_mask = supp_mask.reshape((query_feat.shape[0], -1, 1, *query_feat.shape[2:]))  # (n, k, 1, ?, ?)
+        supp_feat = self._get_prototypes(supp_feat, supp_mask)
 
         # compute pyramid features
         pyramid_feat_list, aux_list = self._pyramid(supp_feat, query_feat, prior)
@@ -262,36 +324,20 @@ class PFENet(nn.Module):
         q = query_feat.view((n, d, -1)).permute((0, 2, 1))  # (n, ?, d)
         return att(key=k, query=q)[0].mean(1).view((n, d, 1, 1))
 
-    def _get_prototypes(self, supp_feat, mask, query_feat):
-        # supp_feat: (nk, d, h, w)
-        # mask: (nk, 1, h, w)
+    def _get_prototypes(self, supp_feat, mask):
+        # supp_feat: (n, k, d, h, w)
+        # mask: (n, k, 1, h, w)
         # query_feat: (n, d, h, w)
-        n, d, h, w = query_feat.shape
-        supp_feat_ = supp_feat * mask
-        supp_feat_ = supp_feat_.reshape((n, -1, d, h, w))  # (n, k, d, h, w)
-        supp_feat_ = supp_feat_.permute((0, 1, 3, 4, 2))  # (n, k, h, w, d)
+        n, k, d, h, w = supp_feat.shape
+        supp_feat_ = supp_feat.permute((0, 1, 3, 4, 2))  # (n, k, h, w, d)
         supp_feat_ = supp_feat_.reshape((n, -1, d))  # (n, ?, d)
-        proto = self.att(supp_feat_, 3)[0]  # (n, 3, d)
-        proto = proto.reshape((n, -1, 1, 1))  # (n, 3d, 1, 1)
+        mask_ = mask.permute((0, 1, 3, 4, 2))  # (n, k, h, w, 1)
+        mask_ = mask_.reshape(n, -1, 1)
+        proto = self.att(query=3, key=supp_feat_, mask=mask_)[0]  # (n, 3, d)
+        proto_bg = self.att_bg(query=3, key=supp_feat_, mask=1.0 - mask_)[0]  # (n, 3, d)
+        proto = torch.cat([proto, proto_bg], 1)  # (n, 6, d)
+        proto = proto.reshape((n, -1, 1, 1))  # (n, 6d, 1, 1)
         return proto
-
-    # def _k_attention(self, features, kernels, num_steps=5, scale=10.0):
-    #     # features: (n, f, d)
-    #     # kernels: (n, k, d)
-    #     assert num_steps > 0
-    #     if isinstance(kernels, int):
-    #         kernels = F.adaptive_avg_pool1d(features.detach().permute((0, 2, 1)), kernels).permute((0, 2, 1))
-    #     for _ in range(num_steps):
-    #         features_ = self.att(features)
-    #         # features_ = F.normalize(features, 2, 1)
-    #         # kernels_ = F.normalize(kernels, 2, 1)
-    #         sim_mat = torch.einsum('nfd,nkd->nfk', features_, kernels)  # (n, f, k)
-    #         sim_mat = F.softmax(sim_mat * scale, 2)
-    #         sim_mat_ = sim_mat.unsqueeze(3)  # (n, f, k, 1)
-    #         features_ = features.unsqueeze(2)  # (n, f, 1, d)
-    #         kernels = (sim_mat_ * features_).sum(1) / sim_mat_.sum(1)
-    #     # noinspection PyUnboundLocalVariable
-    #     return kernels, sim_mat
 
     @staticmethod
     def _weighted_gap(supp_feat, mask, eps=1e-4):
