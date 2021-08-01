@@ -28,14 +28,14 @@ class Trainer(object):
         parser.add_argument('--gpu', type=str, default='0', help='Which GPU to use.')
         parser.add_argument('--data-path', required=True, help='Path of the directory that contains the data files.')
         parser.add_argument('--batch-size', type=int, default=8, help='Batch size.')
-        parser.add_argument('--num-epochs', type=int, default=100, help='The number of epochs to train.')
+        parser.add_argument('--num-epochs', type=int, default=30, help='The number of epochs to train.')
         parser.add_argument('--max-lr', type=float, default=1e-3, help='The maximum value of learning rate.')
         parser.add_argument('--weight-decay', type=float, default=0.3, help='The weight decay value.')
         parser.add_argument('--optimizer', default='AdamW', help='Name of the optimizer to use.')
 
         parser.add_argument('--num-shots', type=int, default=5)
         parser.add_argument('--image-size', type=int, default=473)
-        parser.add_argument('--split', type=int, choices=[0, 1, 2, 3], default=0)
+        parser.add_argument('--split', type=int, choices=[0, 1, 2, 3], required=True)
         parser.add_argument('--output-dir', default=None)
         self._args = parser.parse_args()
         os.environ['CUDA_VISIBLE_DEVICES'] = self._args.gpu

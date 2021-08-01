@@ -4,6 +4,7 @@
 @author: Guangyi
 @since: 2021-07-16
 """
+import copy
 
 import torch
 from torch import nn
@@ -86,21 +87,11 @@ class DotProductKAttention(nn.Module):
         self.res_query = nn.Sequential(
             nn.Linear(feature_size, feature_size),
             nn.ReLU(),
-            nn.Dropout(p=0.2),
             nn.Linear(feature_size, feature_size),
             nn.ReLU(),
-            nn.Dropout(p=0.2),
             nn.Linear(feature_size, feature_size)
         )
-        self.res_key = nn.Sequential(
-            nn.Linear(feature_size, feature_size),
-            nn.ReLU(),
-            nn.Dropout(p=0.2),
-            nn.Linear(feature_size, feature_size),
-            nn.ReLU(),
-            nn.Dropout(p=0.2),
-            nn.Linear(feature_size, feature_size)
-        )
+        self.res_key = copy.deepcopy(self.res_query)
 
     def forward(self, query, key, mask, num_steps=1, scale=1.0):
         # query: (n, q, d)
@@ -115,18 +106,18 @@ class DotProductKAttention(nn.Module):
             query = F.adaptive_avg_pool1d(key_no_grad, query_len)  # (n, d, q)
             query = query.permute((0, 2, 1))  # (n, q, d)
 
-        query = self.res_query(query) + query
-        key = self.res_key(key) + key
-        value = key.unsqueeze(1)  # (n, 1, k, d)
         mask = mask.permute((0, 2, 1))  # (n, 1, k)
 
         for _ in range(num_steps):
             # features_ = F.normalize(features, 2, 1)
             # kernels_ = F.normalize(kernels, 2, 1)
+            query = self.res_query(query) + query
+            key = self.res_key(key) + key
             sim_mat = torch.einsum('nqd,nkd->nqk', query, key)  # (n, q, k)
             sim_mat = self._softmax(sim_mat * scale, 2, mask=mask)
 
             sim_mat_ = sim_mat.unsqueeze(3)  # (n, q, k, 1)
+            value = key.unsqueeze(1)  # (n, 1, k, d)
             query = sim_mat_ * value  # (n, q, k, d)
             query = query.sum(2)  # (n, q, d)
 
