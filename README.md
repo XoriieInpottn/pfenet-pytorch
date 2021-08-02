@@ -1,8 +1,6 @@
 # PFENet
 
-This is the implementation of the good work [**PFENet: Prior Guided Feature Enrichment Network for Few-shot Segmentation**](http://arxiv.org/abs/2008.01449).
-
-Based on this paper, we rewrite the code for **training efficiency** and **better code reuse**. Thanks to the [official implementation](https://github.com/dvlab-research/PFENet).
+This is the implementation of the good work [**PFENet: Prior Guided Feature Enrichment Network for Few-shot Segmentation**](http://arxiv.org/abs/2008.01449). Based on this paper, we rewrite the code for **higher training efficiency** and **better code reuse**. Thanks to the [official implementation](https://github.com/dvlab-research/PFENet).
 
 ## Dataset
 
