@@ -8,7 +8,7 @@ In this paper, PASCAL-5i and COCO 2014 are used for evaluation.
 
 We have preprocessed PASCAL-5i, and you can [download](https://pan.baidu.com/s/1lNR1scGg8MqpD94TeTaafQ) (pass code: b74i) it directly.
 
-All datasets are stored in DocSet (*.ds) files, since this file format is portable and efficient. To support ds files in your system, install the "dcoset" package for your  python environment.
+All datasets are stored in [DocSet](https://github.com/XoriieInpottn/docset) (*.ds) files, since this file format is portable and efficient. To support ds files in your system, install the "dcoset" package for your  python environment.
 
 ```bash
 pip3 install docset
