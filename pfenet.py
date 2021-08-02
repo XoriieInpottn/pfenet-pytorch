@@ -4,7 +4,8 @@
 @author: Guangyi
 @since: 2021-07-16
 """
-from typing import List
+
+from typing import Iterable, Union
 
 import torch
 from torch import nn
@@ -15,18 +16,74 @@ def resize(feat, size):
     return F.interpolate(feat, size=size, mode='bilinear', align_corners=True)
 
 
+class PyramidBlock(nn.Module):
+
+    def __init__(self,
+                 scale: Union[tuple, list, int, float],
+                 feat_size: int, *,
+                 first_scale=False):
+        super(PyramidBlock, self).__init__()
+        if isinstance(scale, (tuple, list)):
+            self._height, self._width = scale
+        else:
+            self._height = self._width = scale
+
+        self.init_merge = nn.Sequential(
+            nn.Conv2d(feat_size * 2 + 1, feat_size, kernel_size=(1, 1), bias=False),
+            nn.ReLU(inplace=True)
+        )
+        self.alpha_conv = nn.Sequential(
+            nn.Conv2d(feat_size * 2, feat_size, kernel_size=(1, 1), bias=False),
+            nn.ReLU(inplace=True)
+        ) if not first_scale else None
+        self.beta_conv = nn.Sequential(
+            nn.Conv2d(feat_size, feat_size, kernel_size=(3, 3), padding=(1, 1), bias=False),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(feat_size, feat_size, kernel_size=(3, 3), padding=(1, 1), bias=False),
+            nn.ReLU(inplace=True)
+        )
+        self.inner_cls = nn.Sequential(
+            nn.Conv2d(feat_size, feat_size, kernel_size=(3, 3), padding=(1, 1), bias=False),
+            nn.ReLU(inplace=True),
+            nn.Dropout2d(p=0.1),
+            nn.Conv2d(feat_size, 2, kernel_size=(1, 1))
+        )
+
+    def forward(self, pyramid_feat, supp_feat, query_feat, prior):
+        bin_h, bin_w = self._height, self._width
+        if bin_h <= 1.0:
+            bin_h = int(query_feat.shape[2] * bin_h)
+        if bin_w < 1.0:
+            bin_w = int(query_feat.shape[3] * bin_w)
+
+        query_feat_bin = resize(query_feat, (bin_h, bin_w))  # (n, d, bin_h, bin_w)
+        supp_feat_bin = supp_feat.expand((-1, -1, bin_h, bin_w))  # (n, d, bin_h, bin_w)
+        prior_bin = resize(prior, (bin_h, bin_w))  # (n, 1, bin_h, bin_w)
+        merged = torch.cat([query_feat_bin, supp_feat_bin, prior_bin], 1)  # (n, 2d + 1, bin_h, bin_w)
+        merged = self.init_merge(merged)  # (n, d, bin_h, bin_w)
+
+        if self.alpha_conv is not None:
+            pyramid_feat_bin = resize(pyramid_feat, (bin_h, bin_w))
+            pyramid_feat_bin = torch.cat([merged, pyramid_feat_bin], 1)
+            merged = self.alpha_conv(pyramid_feat_bin) + merged  # (n, d, bin_h, bin_w)
+
+        merged = self.beta_conv(merged) + merged  # (n, d, bin_h, bin_w)
+        aux = self.inner_cls(merged) if self.training else None  # (n, num_class, bin_h, bin_w)
+        return merged, aux
+
+
 class PFENet(nn.Module):
 
     def __init__(self,
-                 backbone_layers: List[nn.Module],
+                 backbone_layers: Iterable[nn.Module],
                  feat_size=256,
                  num_classes=2,
                  ppm_scales=(60, 30, 15, 8)):
         super(PFENet, self).__init__()
         self._ppm_scales = ppm_scales
 
-        assert len(backbone_layers) >= 4
         self.backbone = nn.ModuleList(backbone_layers)
+        assert len(self.backbone) >= 4
         for layer in self.backbone:
             layer.eval()
             for p in layer.parameters():
@@ -51,34 +108,9 @@ class PFENet(nn.Module):
             nn.Dropout2d(p=0.5)
         )
 
-        self.init_merge = nn.ModuleList()
-        self.alpha_conv = nn.ModuleList()
-        self.beta_conv = nn.ModuleList()
-        self.inner_cls = nn.ModuleList()
-        for i in range(len(self._ppm_scales)):
-            self.init_merge.append(nn.Sequential(
-                nn.Conv2d(feat_size * 2 + 1, feat_size, kernel_size=(1, 1), bias=False),
-                nn.ReLU(inplace=True)
-            ))
-            if i > 0:
-                # alpha_conv is used to fuse the feature from the last scale
-                # so at the first scale, there is nothing to conv
-                self.alpha_conv.append(nn.Sequential(
-                    nn.Conv2d(feat_size * 2, feat_size, kernel_size=(1, 1), bias=False),
-                    nn.ReLU(inplace=True)
-                ))
-            self.beta_conv.append(nn.Sequential(
-                nn.Conv2d(feat_size, feat_size, kernel_size=(3, 3), padding=(1, 1), bias=False),
-                nn.ReLU(inplace=True),
-                nn.Conv2d(feat_size, feat_size, kernel_size=(3, 3), padding=(1, 1), bias=False),
-                nn.ReLU(inplace=True)
-            ))
-            self.inner_cls.append(nn.Sequential(
-                nn.Conv2d(feat_size, feat_size, kernel_size=(3, 3), padding=(1, 1), bias=False),
-                nn.ReLU(inplace=True),
-                nn.Dropout2d(p=0.1),
-                nn.Conv2d(feat_size, num_classes, kernel_size=(1, 1))
-            ))
+        self.pyramid_blocks = nn.ModuleList()
+        for i, scale in enumerate(self._ppm_scales):
+            self.pyramid_blocks.append(PyramidBlock(scale, feat_size, first_scale=(i == 0)))
 
         self.res1 = nn.Sequential(
             nn.Conv2d(feat_size * len(self._ppm_scales), feat_size, kernel_size=(1, 1), bias=False),
@@ -170,9 +202,16 @@ class PFENet(nn.Module):
         supp_feat = supp_feat.mean(1)  # (n, d, 1, 1)
 
         # compute pyramid features
-        pyramid_feat_list, aux_list = self._pyramid(supp_feat, query_feat, prior)
-        feat_size = (query_feat.size(2), query_feat.size(3))
-        query_feat = torch.cat([resize(pyramid_feat, feat_size) for pyramid_feat in pyramid_feat_list], 1)
+        pyramid_feat_list = []
+        aux_list = []
+        feat_size = (query_feat.shape[2], query_feat.shape[3])
+        pyramid_feat = None
+        for block in self.pyramid_blocks:
+            pyramid_feat, aux = block(pyramid_feat, supp_feat, query_feat, prior)
+            pyramid_feat = resize(pyramid_feat, feat_size)
+            pyramid_feat_list.append(pyramid_feat)
+            aux_list.append(aux)
+        query_feat = torch.cat(pyramid_feat_list, 1)
 
         # compute output
         query_feat = self.res1(query_feat)
@@ -204,42 +243,6 @@ class PFENet(nn.Module):
         prior = prior.view((n, k, h, w))  # (n, k, h, w)
         prior = prior.mean(1, keepdim=True)  # (n, 1, h, w)
         return prior
-
-    def _pyramid(self, supp_feat, query_feat, prior):
-        # supp_feat: (n, d, 1, 1)
-        # query_feat: (n, d, h, w)
-        pyramid_feat_list = []
-        aux_list = []
-        for idx, tmp_bin in enumerate(self._ppm_scales):
-            if isinstance(tmp_bin, (tuple, list)):
-                bin_h, bin_w = tmp_bin
-            else:
-                bin_h, bin_w = tmp_bin, tmp_bin
-            if bin_h <= 1.0:
-                bin_h = (int(query_feat.size(2) * bin_h), int(query_feat.size(3) * bin_h))
-            if bin_w < 1.0:
-                bin_w = (int(query_feat.size(2) * bin_w), int(query_feat.size(3) * bin_w))
-
-            query_feat_bin = F.adaptive_avg_pool2d(query_feat, (bin_h, bin_w))  # (n, d, bin_h, bin_w)
-            supp_feat_bin = supp_feat.expand(-1, -1, bin_h, bin_w)  # (n, d, bin_h, bin_w)
-            prior_bin = resize(prior, (bin_h, bin_w))  # (n, 1, bin_h, bin_w)
-            merge_feat_bin = torch.cat([query_feat_bin, supp_feat_bin, prior_bin], 1)  # (n, 2d + 1, bin_h, bin_w)
-            merge_feat_bin = self.init_merge[idx](merge_feat_bin)  # (n, d, bin_h, bin_w)
-
-            if idx > 0:
-                pre_feat_bin = pyramid_feat_list[idx - 1]
-                pre_feat_bin = resize(pre_feat_bin, (bin_h, bin_w))
-                rec_feat_bin = torch.cat([merge_feat_bin, pre_feat_bin], 1)
-                merge_feat_bin = self.alpha_conv[idx - 1](rec_feat_bin) + merge_feat_bin  # (n, d, bin_h, bin_w)
-
-            merge_feat_bin = self.beta_conv[idx](merge_feat_bin) + merge_feat_bin  # (n, d, bin_h, bin_w)
-            pyramid_feat_list.append(merge_feat_bin)
-
-            if self.training:
-                inner_out_bin = self.inner_cls[idx](merge_feat_bin)  # (n, num_class, bin_h, bin_w)
-                aux_list.append(inner_out_bin)
-
-        return pyramid_feat_list, aux_list
 
 
 class CrossEntropyLoss(nn.Module):
