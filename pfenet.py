@@ -4,6 +4,7 @@
 @author: Guangyi
 @since: 2021-07-16
 """
+from typing import List
 
 import torch
 from torch import nn
@@ -17,29 +18,27 @@ def resize(feat, size):
 class PFENet(nn.Module):
 
     def __init__(self,
-                 layer0: nn.Module,
-                 layer1: nn.Module,
-                 layer2: nn.Module,
-                 layer3: nn.Module,
-                 layer4: nn.Module,
-                 backbone_feat_size,
+                 backbone_layers: List[nn.Module],
                  feat_size=256,
                  num_classes=2,
                  ppm_scales=(60, 30, 15, 8)):
         super(PFENet, self).__init__()
         self._ppm_scales = ppm_scales
 
-        def _no_update(layer: nn.Module) -> nn.Module:
+        assert len(backbone_layers) >= 4
+        self.backbone = nn.ModuleList(backbone_layers)
+        for layer in self.backbone:
             layer.eval()
             for p in layer.parameters():
                 p.requires_grad = False
-            return layer
 
-        self.layer0 = _no_update(layer0)
-        self.layer1 = _no_update(layer1)
-        self.layer2 = _no_update(layer2)
-        self.layer3 = _no_update(layer3)
-        self.layer4 = _no_update(layer4)
+        # detect the shape of every output
+        dummy = torch.FloatTensor(1, 3, 100, 100)
+        size_list = []
+        for layer in self.backbone:
+            dummy = layer(dummy)
+            size_list.append(dummy.shape[1])
+        backbone_feat_size = size_list[-2] + size_list[-3]
 
         self.down_query = nn.Sequential(
             nn.Conv2d(backbone_feat_size, feat_size, kernel_size=(1, 1), bias=False),
@@ -103,7 +102,7 @@ class PFENet(nn.Module):
             raise ValueError("training mode is expected to be boolean")
         self.training = mode
         for module in self.children():
-            if module in {self.layer0, self.layer1, self.layer2, self.layer3, self.layer4}:
+            if module in set(self.backbone):
                 continue
             module.train(mode)
         return self
@@ -118,82 +117,91 @@ class PFENet(nn.Module):
                  out_aux: dtype=float32, shape=(num_scales, n, num_classes, output_h, output_w)
         """
         # get the deep feature of the query sample
-        # query_feat_4 is used for generate the prior mask
+        # query_feat_c is used for generate the prior mask
         # query_feat is used for fusion and prediction
         with torch.no_grad():
-            query_feat_0 = self.layer0(qx)
-            query_feat_1 = self.layer1(query_feat_0)
-            query_feat_2 = self.layer2(query_feat_1)
-            query_feat_3 = self.layer3(query_feat_2)
-            query_feat_4 = self.layer4(query_feat_3)
-            if query_feat_2.shape[2:4] != query_feat_3.shape[2:4]:
-                query_feat_2 = resize(query_feat_2, (query_feat_3.size(2), query_feat_3.size(3)))
-        query_feat = torch.cat([query_feat_3, query_feat_2], 1)
-        query_feat = self.down_query(query_feat)
+            query_feat_list = []
+            query_feat = qx
+            for layer in self.backbone:
+                query_feat = layer(query_feat)
+                query_feat_list.append(query_feat)
+            query_feat_a = query_feat_list[-3]
+            query_feat_b = query_feat_list[-2]
+            query_feat_c = query_feat_list[-1]
+
+            query_feat_a_ = resize(query_feat_a, (query_feat_b.shape[2], query_feat_b.shape[3]))
+            query_feat = torch.cat([query_feat_a_, query_feat_b], 1)
+
+        query_feat = self.down_query(query_feat)  # (n, d, ?, ?)
 
         # get the deep feature of the support sample
-        # supp_feat_4 is used for generate the prior mask
+        # supp_feat_c is used for generate the prior mask
         # supp_feat is used for fusion and prediction
-        # not that supp_feat_4 and supp_feat have different shape
+        # note that supp_feat_c and supp_feat have different shape
         sx_flat = sx.view((-1, *sx.shape[2:]))  # (n, k, c, h, w) -> (nk, c, h, w)
         sy_flat = sy.float().view((-1, 1, *sy.shape[2:]))  # (n, k, h, w) -> (nk, 1, h, w)
         with torch.no_grad():
-            supp_feat_0 = self.layer0(sx_flat)
-            supp_feat_1 = self.layer1(supp_feat_0)
-            supp_feat_2 = self.layer2(supp_feat_1)
-            supp_feat_3 = self.layer3(supp_feat_2)
-            supp_feat_3_hw = (supp_feat_3.size(2), supp_feat_3.size(3))
-            supp_feat_3_mask = resize(sy_flat, supp_feat_3_hw)
-            supp_feat_4 = self.layer4(supp_feat_3 * supp_feat_3_mask)
-            supp_feat_4_hw = (supp_feat_4.size(2), supp_feat_4.size(3))
-            supp_feat_4_mask = resize(sy_flat, supp_feat_4_hw)
-            supp_feat_4 = supp_feat_4 * supp_feat_4_mask
-            if supp_feat_2.shape[2:4] != supp_feat_3.shape[2:4]:
-                supp_feat_2 = resize(supp_feat_2, (supp_feat_3.size(2), supp_feat_3.size(3)))
-        supp_feat = torch.cat([supp_feat_3, supp_feat_2], 1)
-        supp_feat = self.down_supp(supp_feat)
+            supp_feat_list = []
+            supp_feat = sx_flat
+            for layer in self.backbone:
+                supp_feat = layer(supp_feat)
+                supp_feat_list.append(supp_feat)
+            supp_feat_a = supp_feat_list[-3]
+            supp_feat_b = supp_feat_list[-2]
+            supp_feat_c = supp_feat_list[-1]
+            supp_mask_c = resize(sy_flat, (supp_feat_c.shape[2], supp_feat_c.shape[3]))
+
+            supp_feat_a_ = resize(supp_feat_a, (supp_feat_b.shape[2], supp_feat_b.shape[3]))
+            supp_feat = torch.cat([supp_feat_a_, supp_feat_b], 1)
+            supp_mask = resize(sy_flat, (supp_feat.shape[2], supp_feat.shape[3]))
+
+        supp_feat = self.down_supp(supp_feat)  # (nk, d, ?, ?)
+
+        supp_feat = supp_feat.reshape((sx.shape[0], -1, *supp_feat.shape[1:]))  # (n, k, d, ?, ?)
+        supp_mask = supp_mask.reshape((sx.shape[0], -1, *supp_mask.shape[1:]))  # (n, k, 1, ?, ?)
+        supp_feat_c = supp_feat_c.reshape((sx.shape[0], -1, *supp_feat_c.shape[1:]))  # (n, k, ?, ?, ?)
+        supp_mask_c = supp_mask_c.reshape((sx.shape[0], -1, *supp_mask_c.shape[1:]))  # (n, k, 1, ?, ?)
 
         # compute prior
-        prior = self._make_prior(supp_feat_4, query_feat_4)
+        prior = self._make_prior(supp_feat_c * supp_mask_c, query_feat_c)
 
         # compute prototype
-        supp_feat = self._weighted_gap(supp_feat, supp_feat_3_mask)  # (nk, d, 1, 1)
-        supp_feat = supp_feat.view((sx.size(0), -1, *supp_feat.size()[1:]))  # (n, k, d, 1, 1)
+        supp_feat = self._weighted_gap(supp_feat, supp_mask)  # (n, k, d, 1, 1)
         supp_feat = supp_feat.mean(1)  # (n, d, 1, 1)
 
         # compute pyramid features
         pyramid_feat_list, aux_list = self._pyramid(supp_feat, query_feat, prior)
         feat_size = (query_feat.size(2), query_feat.size(3))
-        feat = torch.cat([resize(pyramid_feat, feat_size) for pyramid_feat in pyramid_feat_list], 1)
+        query_feat = torch.cat([resize(pyramid_feat, feat_size) for pyramid_feat in pyramid_feat_list], 1)
 
         # compute output
-        feat = self.res1(feat)
-        feat = self.res2(feat) + feat
-        output = self.cls(feat)
+        query_feat = self.res1(query_feat)
+        query_feat = self.res2(query_feat) + query_feat
+        output = self.cls(query_feat)
 
         return output, aux_list
 
     @staticmethod
     def _weighted_gap(supp_feat, mask, eps=1e-4):
-        # supp_feat: (n, d, h, w)
-        # mask: (n, 1, h, w)
-        weight = mask.mean((2, 3), keepdims=True) + eps
-        return (supp_feat * mask).mean((2, 3), keepdims=True) / weight
+        # supp_feat: (n, k, d, h, w)
+        # mask: (n, k, 1, h, w)
+        weight = mask.mean((3, 4), keepdims=True) + eps
+        return (supp_feat * mask).mean((3, 4), keepdims=True) / weight
 
     @staticmethod
     def _make_prior(supp_feat, query_feat):
-        # supp_feat: (nk, c, h, w)
+        # supp_feat: (n, k, c, h, w)
         # query_feat: (n, c, h, w)
-        n, c, h, w = query_feat.shape
+        n, k, c, h, w = supp_feat.shape
         query_feat = F.normalize(query_feat, 2, 1)
-        supp_feat = F.normalize(supp_feat, 2, 1)
+        supp_feat = F.normalize(supp_feat, 2, 2)
         query_feat = query_feat.view((n, c, -1))  # (n, c, hw)
-        supp_feat = supp_feat.view(n, -1, c, h * w)  # (n, k, c, hw)
+        supp_feat = supp_feat.view(n, k, c, -1)  # (n, k, c, hw)
         sim = torch.einsum('nca,nkcb->nkab', query_feat, supp_feat).max(3)[0]  # (n, k, hw)
         sim_min = sim.min(2, keepdim=True)[0]  # (n, k, 1)
         sim_max = sim.max(2, keepdim=True)[0]  # (n, k, 1)
         prior = (sim - sim_min) / (sim_max - sim_min + 1e-10)
-        prior = prior.view((prior.size(0), prior.size(1), h, w))  # (n, k, h, w)
+        prior = prior.view((n, k, h, w))  # (n, k, h, w)
         prior = prior.mean(1, keepdim=True)  # (n, 1, h, w)
         return prior
 
@@ -270,9 +278,10 @@ class CrossEntropyLoss(nn.Module):
 
 class FocalLoss(nn.Module):
 
-    def __init__(self, eps=1e-10):
+    def __init__(self, eps=1e-10, gamma=3):
         super(FocalLoss, self).__init__()
         self._eps = eps
+        self._gamma = gamma
 
     def forward(self, output, target, aux_list=None):
         """Focal loss.
@@ -289,7 +298,7 @@ class FocalLoss(nn.Module):
         output = resize(output, size)
         output = F.softmax(output, 1)
         p = (target * output).sum(1)
-        loss = -torch.pow(1.0 - p, 3) * torch.log(p + self._eps)
+        loss = -torch.pow(1.0 - p, self._gamma) * torch.log(p + self._eps)
         loss = loss.sum((1, 2)).mean()
 
         if aux_list:
@@ -298,7 +307,7 @@ class FocalLoss(nn.Module):
             aux = F.softmax(aux, 2)
 
             p = (target * aux).sum(2)
-            loss_aux = -torch.pow(1.0 - p, 3) * torch.log(p + self._eps)
+            loss_aux = -torch.pow(1.0 - p, self._gamma) * torch.log(p + self._eps)
             loss_aux = loss_aux.sum((2, 3)).mean()
             loss = loss + loss_aux
 
@@ -333,7 +342,7 @@ def get_vgg16_layers(pretrained=True):
     layer2 = nn.Sequential(*layers_2)
     layer3 = nn.Sequential(*layers_3)
     layer4 = nn.Sequential(*layers_4)
-    return layer0, layer1, layer2, layer3, layer4, 512 + 256
+    return layer0, layer1, layer2, layer3, layer4
 
 
 def get_resnet18_layers(pretrained=True):
@@ -347,7 +356,7 @@ def get_resnet18_layers(pretrained=True):
     layer2 = net.layer2
     layer3 = net.layer3
     layer4 = net.layer4
-    return layer0, layer1, layer2, layer3, layer4, 256 + 128
+    return layer0, layer1, layer2, layer3, layer4
 
 
 def get_resnet34_layers(pretrained=True):
@@ -361,7 +370,7 @@ def get_resnet34_layers(pretrained=True):
     layer2 = net.layer2
     layer3 = net.layer3
     layer4 = net.layer4
-    return layer0, layer1, layer2, layer3, layer4, 256 + 128
+    return layer0, layer1, layer2, layer3, layer4
 
 
 def get_resnet50_layers(pretrained=True):
@@ -375,24 +384,4 @@ def get_resnet50_layers(pretrained=True):
     layer2 = net.layer2
     layer3 = net.layer3
     layer4 = net.layer4
-    return layer0, layer1, layer2, layer3, layer4, 1024 + 512
-
-
-def test():
-    model = PFENet(*get_vgg16_layers())
-    loss_fn = CrossEntropyLoss()
-
-    sx = torch.normal(0.0, 1.0, (4, 5, 3, 473, 473), dtype=torch.float32)
-    sy = torch.randint(0, 1, (4, 5, 473, 473), dtype=torch.int64)
-    qx = torch.normal(0.0, 1.0, (4, 3, 473, 473), dtype=torch.float32)
-    qy = torch.ones(4, 473, 473, dtype=torch.int64)
-
-    model.train()
-    out, out_aux = model(sx, sy, qx)
-    print(out.shape)
-    print(loss_fn(out, qy, out_aux))
-    return 0
-
-
-if __name__ == '__main__':
-    exit(test())
+    return layer0, layer1, layer2, layer3, layer4
