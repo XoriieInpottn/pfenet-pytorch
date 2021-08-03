@@ -13,12 +13,12 @@ import numpy as np
 import torch
 from torch import optim
 from torch.utils.data import DataLoader
+from torchcommon.optim.lr_scheduler import CosineWarmUpAnnealingLR
 from tqdm import tqdm
 
 import dataset
 import evaluate
 import pfenet
-import utils
 
 
 class Trainer(object):
@@ -115,7 +115,7 @@ class Trainer(object):
                 weight_decay=self._args.weight_decay,
             )
         num_loops = self._args.num_epochs * len(self._train_loader)
-        self._scheduler = utils.CosineWarmUpAnnealingLR(self._optimizer, num_loops)
+        self._scheduler = CosineWarmUpAnnealingLR(self._optimizer, num_loops)
 
     def train(self):
         loss_g = None
