@@ -139,12 +139,13 @@ class PFENet(nn.Module):
             module.train(mode)
         return self
 
-    def forward(self, sx, sy, qx):
+    def forward(self, sx, sy, qx, eps=1e-4):
         """PFENet
 
         :param sx: dtype=float32, shape=(n, k, c, h, w)
         :param sy: dtype=int64, shape=(n, k, h, w)
         :param qx: dtype=float32, shape=(n, c, h, w)
+        :param eps: very small float number
         :return: out: dtype=float32, shape=(n, num_classes, output_h, output_w)
                  out_aux: dtype=float32, shape=(num_scales, n, num_classes, output_h, output_w)
         """
@@ -157,10 +158,11 @@ class PFENet(nn.Module):
             for layer in self.backbone:
                 query_feat = layer(query_feat)
                 query_feat_list.append(query_feat)
-            query_feat_a = query_feat_list[-3]
-            query_feat_b = query_feat_list[-2]
+
             query_feat_c = query_feat_list[-1]
 
+            query_feat_a = query_feat_list[-3]
+            query_feat_b = query_feat_list[-2]
             query_feat_a_ = resize(query_feat_a, (query_feat_b.shape[2], query_feat_b.shape[3]))
             query_feat = torch.cat([query_feat_a_, query_feat_b], 1)
 
@@ -178,27 +180,29 @@ class PFENet(nn.Module):
             for layer in self.backbone:
                 supp_feat = layer(supp_feat)
                 supp_feat_list.append(supp_feat)
-            supp_feat_a = supp_feat_list[-3]
-            supp_feat_b = supp_feat_list[-2]
+
             supp_feat_c = supp_feat_list[-1]
             supp_mask_c = resize(sy_flat, (supp_feat_c.shape[2], supp_feat_c.shape[3]))
 
+            supp_feat_a = supp_feat_list[-3]
+            supp_feat_b = supp_feat_list[-2]
             supp_feat_a_ = resize(supp_feat_a, (supp_feat_b.shape[2], supp_feat_b.shape[3]))
             supp_feat = torch.cat([supp_feat_a_, supp_feat_b], 1)
             supp_mask = resize(sy_flat, (supp_feat.shape[2], supp_feat.shape[3]))
 
-        supp_feat = self.down_supp(supp_feat)  # (nk, d, ?, ?)
-
-        supp_feat = supp_feat.reshape((sx.shape[0], -1, *supp_feat.shape[1:]))  # (n, k, d, ?, ?)
-        supp_mask = supp_mask.reshape((sx.shape[0], -1, *supp_mask.shape[1:]))  # (n, k, 1, ?, ?)
         supp_feat_c = supp_feat_c.reshape((sx.shape[0], -1, *supp_feat_c.shape[1:]))  # (n, k, ?, ?, ?)
         supp_mask_c = supp_mask_c.reshape((sx.shape[0], -1, *supp_mask_c.shape[1:]))  # (n, k, 1, ?, ?)
+
+        supp_feat = self.down_supp(supp_feat)  # (nk, d, ?, ?)
+        supp_feat = supp_feat.reshape((sx.shape[0], -1, *supp_feat.shape[1:]))  # (n, k, d, ?, ?)
+        supp_mask = supp_mask.reshape((sx.shape[0], -1, *supp_mask.shape[1:]))  # (n, k, 1, ?, ?)
 
         # compute prior
         prior = self._make_prior(supp_feat_c * supp_mask_c, query_feat_c)
 
         # compute prototype
-        supp_feat = self._weighted_gap(supp_feat, supp_mask)  # (n, k, d, 1, 1)
+        area = supp_mask.mean((3, 4), keepdims=True) + eps  # (n, k, d, 1, 1)
+        supp_feat = (supp_feat * supp_mask).mean((3, 4), keepdims=True) / area  # (n, k, d, 1, 1)
         supp_feat = supp_feat.mean(1)  # (n, d, 1, 1)
 
         # compute pyramid features
@@ -219,13 +223,6 @@ class PFENet(nn.Module):
         output = self.cls(query_feat)
 
         return output, aux_list
-
-    @staticmethod
-    def _weighted_gap(supp_feat, mask, eps=1e-4):
-        # supp_feat: (n, k, d, h, w)
-        # mask: (n, k, 1, h, w)
-        weight = mask.mean((3, 4), keepdims=True) + eps
-        return (supp_feat * mask).mean((3, 4), keepdims=True) / weight
 
     @staticmethod
     def _make_prior(supp_feat, query_feat):
