@@ -361,7 +361,7 @@ def get_resnet18_layers(pretrained=True):
 
 def get_resnet34_layers(pretrained=True):
     from torchvision.models import resnet
-    net = resnet.resnet18(pretrained=pretrained)
+    net = resnet.resnet34(pretrained=pretrained)
     layer0 = nn.Sequential(
         net.conv1, net.bn1, net.relu,
         net.maxpool
